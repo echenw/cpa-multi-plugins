@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Trae SOLO CN 面板</title>
+<title>Trae 面板</title>
 <style>
 /* Theme tokens aligned with CPA management panel (key-policy / themes.scss):
    default :root = light (paper); data-theme=white | dark; embedded iframe syncs parent.
@@ -18,6 +18,7 @@
   --err-soft:rgba(198,87,70,.10);--err-border:rgba(198,87,70,.30);
   --mut-soft:rgba(109,103,96,.12);--mut-border:rgba(109,103,96,.28);
   --scrim:rgba(45,42,38,.35);--toast-shadow:0 10px 28px rgba(0,0,0,.12),0 0 0 1px rgba(0,0,0,.04);
+  --modal-shadow:0 24px 56px rgba(0,0,0,.18),0 0 0 1px rgba(0,0,0,.04);
   --acc-ring:rgba(76,141,255,.18);--radius-md:12px;--radius-lg:16px;
   color-scheme:light
 }
@@ -26,6 +27,7 @@
   --surface:#fafafa;--surface-muted:#efefef;--btn-sec:#f0f0f0;--btn-sec-hover:#e8e8e8;
   --input-bg:#ffffff;--code-bg:#f3f4f6;--code-fg:#374151;--placeholder:rgba(112,112,112,.55);
   --scrim:rgba(0,0,0,.32);--toast-shadow:0 10px 28px rgba(0,0,0,.10),0 0 0 1px rgba(0,0,0,.04);
+  --modal-shadow:0 24px 56px rgba(0,0,0,.16),0 0 0 1px rgba(0,0,0,.04);
   color-scheme:light
 }
 :root[data-theme="dark"]{
@@ -45,12 +47,13 @@
 .wrap{max-width:1100px;margin:0 auto;padding:24px 16px}
 h1{font-size:20px;margin:0 0 4px}.sub{color:var(--mut);font-size:13px;margin-bottom:20px}
 .bar{display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap}
-button{background:var(--acc);color:var(--on-acc);border:0;border-radius:8px;padding:8px 14px;cursor:pointer;font-size:13px}
+button{background:var(--acc);color:var(--on-acc);border:0;border-radius:8px;padding:8px 14px;cursor:pointer;font-size:13px;white-space:nowrap}
 button.sec{background:var(--btn-sec);color:var(--fg)}button.sec:hover{background:var(--btn-sec-hover)}button:disabled{opacity:.5;cursor:default}
 .toggle{display:flex;gap:8px;align-items:center;color:var(--mut);font-size:13px}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px;margin-bottom:80px}
 .card,.summary{background:var(--card);border:1px solid var(--border);border-radius:12px}
 .card{padding:16px}
+.card.selected{border-color:var(--acc);box-shadow:0 0 0 2px var(--acc-ring)}
 .card h2{font-size:15px;margin:0 0 2px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
 .uid{color:var(--mut);font-size:11px;font-family:ui-monospace,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:12px}
 .badge{font-size:11px;font-weight:600;padding:3px 10px;border-radius:99px;background:var(--ok-soft);color:var(--ok);border:1px solid var(--ok-border)}
@@ -59,6 +62,12 @@ button.sec{background:var(--btn-sec);color:var(--fg)}button.sec:hover{background
 .badge.cooling{background:var(--warn-soft);color:var(--warn);border:1px solid var(--warn-border)}
 .badge.disabled{background:var(--mut-soft);color:var(--mut);border:1px solid var(--mut-border)}
 .badge.checked{background:var(--ok-soft);color:var(--ok);border:1px solid var(--ok-border)}
+.filter-bar{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+.ftag{background:var(--surface);border:1px solid var(--border);color:var(--mut);border-radius:99px;padding:5px 14px;font-size:12px;cursor:pointer;font-weight:600}
+.ftag.active{background:var(--acc);color:var(--on-acc);border-color:var(--acc)}
+.ftag .cnt{font-size:10px;opacity:.75;margin-left:4px}
+.lreg{background:var(--surface);border:1px solid var(--border);color:var(--mut);border-radius:99px;padding:5px 14px;font-size:12px;cursor:pointer;font-weight:600}
+.lreg.on{background:var(--acc);color:var(--on-acc);border-color:var(--acc)}
 .summary{padding:16px;margin-bottom:14px}
 .summary-hd{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
 .summary-title{font-weight:700;font-size:14px}
@@ -86,7 +95,7 @@ button.sec{background:var(--btn-sec);color:var(--fg)}button.sec:hover{background
 .toast.ok{border-left-color:var(--ok);background:var(--ok-soft)}
 .toast.warn{border-left-color:var(--warn);background:var(--warn-soft)}
 .toast.err{border-left-color:var(--err);background:var(--err-soft)}
-button.done{background:var(--ok-soft);color:var(--ok);border:1px solid var(--ok-border);cursor:default;opacity:1}
+button.done{background:var(--ok-soft);color:var(--ok);box-shadow:0 0 0 1px var(--ok-border);cursor:default;opacity:1}
 button.done:disabled{opacity:1}
 .toast .t{font-weight:600;margin-bottom:3px}
 .toast .d{color:var(--mut);font-size:12px;line-height:1.45}
@@ -103,19 +112,25 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
 .mg-item input{accent-color:var(--acc)}
 .mg-item.mg-locked{opacity:.6;cursor:default}
 .mg-note{color:var(--warn);font-size:12px;margin-top:6px}
-/* 授权登录弹窗（in-panel OAuth modal）：标题 + 说明 + CN/Intl 切换（默认 Intl，
-   切换即重新开始登录）+ 步骤 1 只读授权链接（复制/新标签页打开，弹窗保持开启）
-   + 步骤 2 回调地址粘贴提交 + 状态行（约 5s 轮询至成功/过期）。 */
-.modal-scrim{position:fixed;inset:0;background:var(--scrim);display:flex;align-items:center;justify-content:center;z-index:10000;padding:16px}
-.modal-box{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);max-width:640px;width:100%;max-height:92vh;overflow-y:auto;padding:20px;box-shadow:var(--toast-shadow)}
-.modal-hd{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}
-.modal-hd b{font-size:16px}
-.modal-intro{color:var(--mut);font-size:13px;margin-bottom:4px}
-.modal-step{margin:12px 0}
-.step-t{font-weight:700;font-size:13px;margin-bottom:6px}
-.modal-status{margin-top:12px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;color:var(--mut);font-size:12px;line-height:1.5;word-break:break-all;max-height:9em;overflow-y:auto}
-.modal-status.ok{color:var(--ok);border-color:var(--ok-border);background:var(--ok-soft)}
-.modal-status.err{color:var(--err);border-color:var(--err-border);background:var(--err-soft)}
+/* 授权登录 + 导入凭证弹窗：与 qoder 统一面板同一套结构
+   （.modal-mask/.modal/.modal-hd/.modal-bd/.hint/.modal-ft；步骤 1 只读授权
+   链接复制/新标签页打开 + 步骤 2 回调粘贴提交 + 状态行约 5s 轮询）。 */
+.modal-mask{position:fixed;inset:0;background:var(--scrim);display:none;align-items:center;justify-content:center;z-index:9000;padding:16px;backdrop-filter:blur(2px)}
+.modal-mask.show{display:flex}
+.modal{background:var(--card);color:var(--fg);border:1px solid var(--border);border-radius:var(--radius-lg);width:min(560px,100%);max-height:min(90vh,640px);display:flex;flex-direction:column;box-shadow:var(--modal-shadow)}
+.modal-hd{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--border)}
+.modal-hd h2{font-size:15px;margin:0;color:var(--fg);font-weight:600}
+.modal-x{background:transparent;color:var(--mut);padding:4px 10px;font-size:18px;line-height:1}
+.modal-x:hover{color:var(--fg);background:var(--surface-muted)}
+.modal-bd{padding:16px;overflow:auto}
+.modal-bd .hint{color:var(--mut);font-size:12px;margin:0 0 10px;line-height:1.5}
+.modal-bd .hint code{background:var(--code-bg);color:var(--code-fg);padding:1px 5px;border-radius:4px;font-size:11px}
+.modal-bd textarea{width:100%;min-height:160px;background:var(--input-bg);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--fg);font:12px/1.45 ui-monospace,monospace;resize:vertical;outline:none}
+.modal-bd textarea:focus{border-color:var(--acc);box-shadow:0 0 0 3px var(--acc-ring)}
+.modal-bd textarea::placeholder{color:var(--placeholder)}
+.modal-ft{display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid var(--border);background:var(--surface);border-radius:0 0 var(--radius-lg) var(--radius-lg)}
+.modal-ft button.sec{background:var(--btn-sec);color:var(--fg)}
+.modal-ft button.sec:hover{background:var(--btn-sec-hover)}
 </style>
 <script>
 /* Early theme sync (before body paint): mirror CPA parent data-theme when
@@ -175,22 +190,23 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
     </div>
   </div>
   <div class="bar">
+    <button id="loginBtn" onclick="panelLoginOpen()">授权登录</button>
+    <span class="toggle" title="授权登录的目标渠道（默认 Intl）">
+      <button type="button" class="lreg" data-login-region="cn" onclick="pickLoginRegion('cn',this)">CN</button>
+      <button type="button" class="lreg on" data-login-region="intl" onclick="pickLoginRegion('intl',this)">Intl</button>
+    </span>
+    <button class="sec" id="importBtn" onclick="openImportModal()">导入凭证</button>
     <button id="refreshBtn" onclick="load(true,this)">刷新数据</button>
     <button class="sec" onclick="checkinAll(this)">全部签到</button>
     <button class="sec" onclick="modelCtlToggle(this)" title="按渠道勾选启用/禁用模型（写入 oauth-excluded-models 子键）">模型禁用</button>
     <span class="toggle" id="svtime"></span>
   </div>
-  <div class="card" style="margin-bottom:16px">
-    <div id="loginStatus" style="margin-bottom:6px;padding:6px 8px;border:1px solid rgba(128,128,128,.35);border-radius:6px;color:var(--mut);font-size:12px;line-height:1.5;word-break:break-all;max-height:9em;overflow-y:auto">登录状态：加载中…</div>
-    <div style="margin-bottom:6px;color:var(--mut)">远程登录兜底：授权完成后浏览器若停在「无法连接 127.0.0.1:&lt;端口&gt;」页面，复制地址栏完整链接粘贴到此处提交，即可完成登录（无需改写前缀）。注意：必须粘贴<b>本次登录</b>生成的链接，登录开始超过 15 分钟或服务重启过则请重新点「登录」后再复制新链接。</div>
-    <div style="display:flex;gap:8px">
-      <input id="cbPaste" type="text" placeholder="http://127.0.0.1:&lt;port&gt;/authorize?isRedirect=true&authCodeInfo=…" class="field-input" style="flex:1">
-      <button onclick="submitCallbackURL(this)">完成登录</button>
-    </div>
-    <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
-      <button onclick="panelLoginOpen()">授权登录</button>
-      <span class="toggle">弹窗内完成授权：打开链接 → 在新标签页登录 → 粘贴回调地址；登录后本页自动刷新</span>
-    </div>
+  <div class="filter-bar" id="filterBar">
+    <button type="button" class="ftag active" data-region="all" onclick="filterRegion('all',this)">全部 <span class="cnt" id="cntAll">0</span></button>
+    <button type="button" class="ftag" data-region="cn" onclick="filterRegion('cn',this)">CN <span class="cnt" id="cntCn">0</span></button>
+    <button type="button" class="ftag" data-region="solo" onclick="filterRegion('solo',this)">SOLO <span class="cnt" id="cntSolo">0</span></button>
+    <button type="button" class="ftag" data-region="intl" onclick="filterRegion('intl',this)">Intl <span class="cnt" id="cntIntl">0</span></button>
+    <button type="button" class="ftag" data-region="exhausted" onclick="filterRegion('exhausted',this)">耗尽 <span class="cnt" id="cntExhausted">0</span></button>
   </div>
   <div class="summary card" id="summaryBox" style="display:none"></div>
   <div class="card" id="modelCtlCard" style="display:none;margin:0 0 14px">
@@ -210,31 +226,56 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
   <div id="grid" class="grid"><div class="loading">加载中…</div></div>
 </div>
 <div class="toasts" id="toasts"></div>
-<div id="loginModalScrim" class="modal-scrim" style="display:none">
-  <div class="modal-box">
-    <div class="modal-hd"><b>Trae 授权登录</b><button class="sec" onclick="panelLoginClose()">关闭</button></div>
-    <div class="modal-intro">在弹窗内完成授权，无需离开本页：先打开授权链接完成浏览器登录，再把授权后地址栏的回调链接粘贴回来提交。切换 CN / Intl 会重新开始本次登录（默认 Intl）。</div>
-    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-      <label class="toggle"><input type="radio" name="loginRealm" value="intl" checked onchange="panelLoginRestart()"> Intl</label>
-      <label class="toggle"><input type="radio" name="loginRealm" value="cn" onchange="panelLoginRestart()"> CN</label>
-      <span class="toggle">默认 Intl；切换即重新开始登录</span>
+<div class="modal-mask" id="importModal" onclick="onImportMaskClick(event)">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="importModalTitle">
+    <div class="modal-hd">
+      <h2 id="importModalTitle">导入 Trae 凭证</h2>
+      <button type="button" class="modal-x" onclick="closeImportModal()" aria-label="关闭">×</button>
     </div>
-    <div class="modal-step">
-      <div class="step-t">步骤 1 · 打开授权链接（弹窗保持开启）</div>
-      <div style="display:flex;gap:8px">
-        <input id="loginAuthUrl" type="text" readonly placeholder="正在生成授权链接…" class="field-input" style="flex:1">
-        <button class="sec" onclick="panelLoginCopy(this)">复制链接</button>
-        <button onclick="panelLoginOpenLink()">打开链接</button>
+    <div class="modal-bd">
+      <p class="hint">粘贴 Trae 凭证 JSON（嵌套或扁平原文，CN / SOLO / Intl 均可自动识别）。插件会保存到宿主凭证库并注册到账号池，无需走浏览器授权流程。</p>
+      <textarea id="importJSON" placeholder='{"uid": "…", …} 或完整嵌套凭证 JSON' autocomplete="off" spellcheck="false"></textarea>
+      <p class="hint" style="margin:8px 0 0;opacity:0.7">导入后自动刷新账号列表；同账号同渠道的凭证会被覆盖。</p>
+    </div>
+    <div class="modal-ft">
+      <button type="button" class="sec" onclick="closeImportModal()">取消</button>
+      <button type="button" onclick="importAuth(this)">导入并保存</button>
+    </div>
+  </div>
+</div>
+<div class="modal-mask" id="loginModal" onclick="onLoginMaskClick(event)">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="loginModalTitle">
+    <div class="modal-hd">
+      <h2 id="loginModalTitle">授权登录</h2>
+      <button type="button" class="modal-x" onclick="panelLoginClose()" aria-label="关闭">×</button>
+    </div>
+    <div class="modal-bd">
+      <p class="hint">在弹窗内完成 Trae 授权：先打开授权链接完成浏览器登录，再把浏览器回调地址粘贴回来提交。关闭弹窗不会中断已开始的登录（15 分钟内可重新打开继续）。</p>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+        <span class="toggle">渠道（默认 Intl，切换会重新开始登录）</span>
+        <button type="button" class="lreg" data-login-modal-region="cn" onclick="pickLoginModalRegion('cn',this)">CN</button>
+        <button type="button" class="lreg on" data-login-modal-region="intl" onclick="pickLoginModalRegion('intl',this)">Intl</button>
       </div>
-    </div>
-    <div class="modal-step">
-      <div class="step-t">步骤 2 · 粘贴授权后的回调地址并提交</div>
-      <div style="display:flex;gap:8px">
-        <input id="loginCallbackUrl" type="text" placeholder="http://127.0.0.1:&lt;port&gt;/authorize?isRedirect=true&authCodeInfo=…" class="field-input" style="flex:1">
-        <button onclick="panelLoginSubmitCallback(this)">提交回调</button>
+      <p class="hint" style="margin-bottom:6px">步骤 1：复制授权链接并在新标签页打开（弹窗保持打开）</p>
+      <div style="display:flex;gap:8px;margin-bottom:12px">
+        <input id="loginAuthURL" type="text" readonly placeholder="正在生成授权链接…" style="flex:1;padding:8px 10px;font-family:ui-monospace,monospace;font-size:12px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--fg);"/>
       </div>
+      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+        <button type="button" class="sec" onclick="panelLoginCopy(this)">复制链接</button>
+        <button type="button" onclick="panelLoginOpenLink()">打开链接</button>
+        <button type="button" class="sec" onclick="panelLoginStart()" title="丢弃当前 state 并按当前渠道重新生成授权链接">重新开始</button>
+      </div>
+      <p class="hint" style="margin-bottom:6px">步骤 2：粘贴浏览器回调地址并提交</p>
+      <div style="display:flex;gap:8px;margin-bottom:12px">
+        <input id="loginCallbackURL" type="text" placeholder="http://127.0.0.1:&lt;port&gt;/authorize?isRedirect=true&authCodeInfo=…" autocomplete="off" style="flex:1;padding:8px 10px;font-family:ui-monospace,monospace;font-size:12px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--fg);"/>
+        <button type="button" onclick="panelLoginSubmitCallback(this)">提交回调</button>
+      </div>
+      <p class="hint" id="loginStatus" style="margin:0">等待开始…</p>
+      <p class="hint" style="margin:8px 0 0;opacity:0.7">关闭弹窗不会中断登录；每 5 秒自动轮询一次，直到成功（自动关闭并刷新账号）或过期（按提示重新开始）。</p>
     </div>
-    <div id="loginModalStatus" class="modal-status">等待开始…</div>
+    <div class="modal-ft">
+      <button type="button" class="sec" onclick="panelLoginClose()">关闭</button>
+    </div>
   </div>
 </div>
 <script>
@@ -473,6 +514,8 @@ function planBadgeClass(plan){
 }
 function card(a){
   const isIntl=a.variant==="intl";
+  // 统一面板过滤 pills 用：cn / solo / Intl（缺省按 cn 归一，与 load() 拼 list 时一致）。
+  const variant=(a.variant==="intl"||a.variant==="solo")?a.variant:"cn";
   const ci=a.checkin||{};
   const cr=a.credits;
   const pool=poolByUID[a.uid]||{};
@@ -532,7 +575,7 @@ function card(a){
        +((a.bound_device_id!=null||a.device_match!=null)?(()=>{ const cls=(a.device_match===false||a.is_login===false)?"err":"";
           const st=(a.device_match===true)?"匹配":((a.device_match===false)?"与本凭证不一致":"未比对");
           return `<div class="row"><span class="k">设备绑定</span><span class="v ${cls}">${esc((a.device_bind_status||"UNKNOWN")+" · "+(a.bound_device_id||"-")+" · "+st)}</span></div>`; })():""));
-  return `<div class="card" data-uid="${escAttr(a.uid)}" data-auth="${escAttr(a.auth_index)}">
+  return `<div class="card" data-variant="${variant}" data-uid="${escAttr(a.uid)}" data-auth="${escAttr(a.auth_index)}">
   <h2>${esc(a.nickname||a.label||a.name)} <span style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">${badges}</span></h2>
   <div class="uid">${esc(a.uid||"")} · ${esc(a.name||"")}</div>
   ${bodyHTML}
@@ -540,6 +583,50 @@ function card(a){
   ${pool.reason&&!cooling?`<div class="row"><span class="k">池状态</span><span class="v warn">${esc(pool.reason)}</span></div>`:""}
   ${(refreshBtn||actionHTML||releaseBtn)?`<div class="actions">${refreshBtn}${actionHTML}${releaseBtn}</div>`:""}
   </div>`;
+}
+/* ===== 统一面板过滤 pills（.ftag）：全部 → CN → SOLO → Intl → 耗尽 =====
+   与 qoder 统一面板同组件/同顺序；realm 取自账号 variant（trae 真实集合：
+   cn / solo / Intl，不虚构）。耗尽判定与卡片徽标同口径（basic 包余量已知
+   为 0 且签到钱包为 0）。汇总保持全局口径（不过滤），只控制卡片显隐+计数。 */
+let currentFilter="all";
+function isExhaustedAcct(a){
+  const cr=a&&a.credits;
+  const ci=(a&&a.checkin)||{};
+  const wallet=(ci.credits!=null)?Number(ci.credits)||0:null;
+  return !!cr && cr.usage_model==="basic" && cr.remain_known!==false
+      && cr.total_remain!=null && Number(cr.total_remain)===0 && wallet===0;
+}
+function filterRegion(region, btn){
+  currentFilter=region||"all";
+  document.querySelectorAll(".ftag").forEach(b=>b.classList.remove("active"));
+  if(btn) btn.classList.add("active");
+  else{
+    document.querySelectorAll(".ftag").forEach(b=>{
+      if(b.dataset.region===currentFilter) b.classList.add("active");
+    });
+  }
+  document.querySelectorAll("#grid .card").forEach(c=>{
+    const v=c.dataset.variant||"cn";
+    let show=true;
+    if(currentFilter==="all") show=true;
+    else if(currentFilter==="exhausted") show=c.querySelector(".badge.exhausted")!=null;
+    else show=v===currentFilter;
+    c.style.display=show?"":"none";
+  });
+}
+function updateFilterCounts(accounts){
+  let cn=0, solo=0, intl=0, ex=0;
+  (accounts||[]).forEach(a=>{
+    const v=(a.variant==="intl"||a.variant==="solo")?a.variant:"cn";
+    if(v==="intl") intl++; else if(v==="solo") solo++; else cn++;
+    if(isExhaustedAcct(a)) ex++;
+  });
+  const set=(id,v)=>{const el=document.getElementById(id);if(el)el.textContent=String(v)};
+  set("cntAll",(accounts||[]).length);
+  set("cntCn",cn);
+  set("cntSolo",solo);
+  set("cntIntl",intl);
+  set("cntExhausted",ex);
 }
 function applyCreditsResult(a, res){
   // v0.12.28: 统一合并 /credits 结果到账号对象（含用量模型字段），
@@ -615,6 +702,7 @@ function updateOneCard(a){
     el.replaceWith(newCard);
     bindCardActions(newCard);
   }
+  filterRegion(currentFilter, null);
   renderSummary(lastAccounts);
 }
 async function api(path, opts={}){
@@ -672,122 +760,102 @@ async function loadPoolStatus(){
     (d.accounts||[]).forEach(s=>{ if(s.uid) poolByUID[s.uid]=s; });
   }catch(_){ /* status is best-effort */ }
 }
-let loginStatusTimer=null;
-async function refreshLoginStatus(){
-  const el=document.getElementById('loginStatus');
-  if(!el)return;
-  try{
-    const r=await fetch("/v0/resource/plugins/"+providerName+"/login_status",{credentials:'omit'});
-    const d=await r.json();
-    if(!d.pending){
-      if(d.outcome){
-        const om=(d.outcome.message||"").replace(/\s+/g," ").trim();
-        // v0.12.24: show the FULL outcome message (the upstream code+reason
-        // extracted from ExchangeToken failures matters for diagnosis) with
-        // wrapping; the mouse-over title keeps a clean copy for copying.
-        el.textContent = d.outcome.ok ? "\u2713 最近一次登录已完成" : "\u2717 最近一次登录失败：" + om;
-        el.title = om;
-      }else{
-        el.textContent = "当前没有进行中的登录。在 CPA 主面板 OAuth 菜单发起登录后，这里会实时显示等待状态。";
-      }
-      el.style.color="var(--mut)";
-      return;
-    }
-    const age=d.age_seconds||0, ttl=d.ttl_seconds_remaining||0;
-    const lines=[];
-    lines.push("\u23f3 登录等待中（"+(d.variant||"cn")+"）· 已等待 "+Math.floor(age/60)+" 分 "+(age%60)+" 秒 · 剩余约 "+Math.ceil(ttl/60)+" 分钟");
-    if(d.callback_hostport){
-      lines.push("浏览器应回连 http://"+d.callback_hostport+"/authorize（服务器本机监听；远程/容器浏览器无法直连属正常现象）");
-    }
-    if(!d.listener_alive){
-      lines.push("\u26a0 监听器未在运行（服务重启过）——粘贴框仍可完成本次登录");
-    }
-    if(d.callback_received){
-      lines.push("\u21bb 回调已收到，正在交换凭证（主面板登录窗口已关闭也没关系：约 15 秒后插件会自行完成交换并保存凭证；若失败，完成后此状态行会显示具体原因）");
-    }
-    lines.push(d.restored
-      ? "该登录已从磁盘恢复：把浏览器地址栏的完整回调链接粘贴到下方即可。"
-      : "若浏览器登录后停在「无法连接」或一直未跳转，复制地址栏完整链接粘贴到下方粘贴框即可完成登录。");
-    el.innerHTML=lines.map(function(x){return x.replace(/&/g,'&amp;').replace(/</g,'&lt;');}).join('<br>');
-    el.style.color = d.listener_alive ? "var(--mut)" : "#c0392b";
-  }catch(e){
-    el.textContent="登录状态：暂时不可用";
-  }
+/* ===== 统一面板：顶栏授权登录渠道（默认 Intl）+ 导入凭证弹窗 =====
+   与 qoder 统一面板同约定：顶栏 .lreg 切换只改本次登录默认渠道，弹窗内
+   .lreg 切换会重新开始登录。导入走已有 POST /import {raw}（handleImportAuth，
+   嵌套/扁平 JSON，CN / SOLO / Intl 自动识别）。
+   说明：顶栏之外的独立登录状态卡 + 站外粘贴框已收敛进授权登录弹窗
+   （单登录入口）；/login_status + /oauth_submit 后端端点保留不变。 */
+let panelLoginRegion="intl";
+function syncLoginRegionUI(){
+  document.querySelectorAll("[data-login-region]").forEach(b=>b.classList.toggle("on",b.dataset.loginRegion===panelLoginRegion));
+  document.querySelectorAll("[data-login-modal-region]").forEach(b=>b.classList.toggle("on",b.dataset.loginModalRegion===panelLoginRegion));
 }
-clearInterval(loginStatusTimer);
-loginStatusTimer=setInterval(refreshLoginStatus,5000);
-refreshLoginStatus();
-async function submitCallbackURL(btn){
-  const raw=(document.getElementById("cbPaste").value||"").trim();
-  if(!raw){toast("请先粘贴完整回调链接","warn");return}
+function pickLoginRegion(r,btn){
+  panelLoginRegion=r;
+  syncLoginRegionUI();
+  if(btn)btn.blur();
+}
+function pickLoginModalRegion(r,btn){
+  if(r===panelLoginRegion&&loginModalState){if(btn)btn.blur();return}
+  panelLoginRegion=r;
+  syncLoginRegionUI();
+  if(btn)btn.blur();
+  if(document.getElementById("loginModal").classList.contains("show"))panelLoginStart();
+}
+function openImportModal(){
+  document.getElementById("importModal").classList.add("show");
+  const t=document.getElementById("importJSON");
+  if(t) setTimeout(()=>t.focus(),50);
+}
+function closeImportModal(){
+  document.getElementById("importModal").classList.remove("show");
+}
+function onImportMaskClick(e){
+  if(e.target===document.getElementById("importModal"))closeImportModal();
+}
+async function importAuth(btn){
+  const raw=(document.getElementById("importJSON").value||"").trim();
+  if(!raw){toast("请粘贴凭证 JSON","warn");return}
   busy(btn,true);
   try{
-    /* Host resource routes are GET-only (ServeResourceHTTP rejects non-GET),
-       so the pasted URL rides as the encoded cb_url query param. */
-    const r=await fetch("/v0/resource/plugins/"+providerName+"/oauth_submit?cb_url="+encodeURIComponent(raw),{credentials:'omit'});
-    const text=await r.text();
-    if(/Login successful|成功/i.test(text)){
-      toast("回调已提交，登录完成中…","ok");
-      document.getElementById("cbPaste").value="";
-      await load(false);
-    }else{
-      /* v0.12.17: keep the box content so the user can retry after re-login;
-         surface the HTTP status + the plugin's bilingual hint text. */
-      toast("回调未完成登录","err",((r.ok?"":"[HTTP "+r.status+"] ")+text.replace(/<[^>]*>/g," ").replace(/\s+/g," ").trim()).slice(0,220));
-    }
-  }catch(e){
-    toast("提交失败","err",e.message);
-  }
+    const d=await api("/import",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({raw})});
+    if(d.success){
+      toast("导入成功","ok",(d.nickname||d.uid||"")+" → "+(d.name||""));
+      document.getElementById("importJSON").value="";
+      closeImportModal();
+      load(false);
+    }else toast("导入失败","err",d.error||"unknown");
+  }catch(e){toast("导入请求失败","err",e.message)}
   busy(btn,false);
 }
-function panelLoginRealm(){
-  const el=document.querySelector('input[name="loginRealm"]:checked');
-  return (el&&el.value==="cn")?"cn":"intl";
-}
-/* ===== 授权登录弹窗（in-panel OAuth modal）=====
+/* ===== 授权登录弹窗（in-panel OAuth modal，统一面板结构）=====
    panelLoginOpen → POST /login/start {region} 取 {auth_url, state} →
-   步骤 1 展示只读链接（复制 / 新标签页打开，弹窗保持开启）→
-   状态行约 5s 轮询 POST /login/poll {state} → 成功（关窗 + 刷新）/
-   过期或失败（停轮询并提示重新开始）。步骤 2 把授权后地址栏回调链接
-   POST /login/callback {state, callback_url}，随后同样走轮询。
-   切换 CN/Intl 即重新开始本次登录。沿用 api()/toast()/busy() 既有模式。 */
+   步骤 1 只读链接（loginAuthURL：复制 / 新标签页打开，弹窗保持开启）→
+   状态行（loginStatus）约 5s 轮询 POST /login/poll {state} → 成功（关窗 +
+   刷新）/ 过期或失败（停轮询并提示重新开始）。步骤 2 把授权后地址栏回调
+   链接（loginCallbackURL）POST /login/callback {state, callback_url}。
+   顶栏/弹窗内 CN/Intl（.lreg，默认 Intl）切换即重新开始本次登录。
+   元素 ID 与 qoder 统一面板同约定（loginModal/loginAuthURL/
+   loginCallbackURL/loginStatus）；ronde-3 流程函数名保持 trae 原样。 */
 let loginModalState="",loginModalTimer=null;
 function panelLoginStatus(text, kind){
-  const el=document.getElementById("loginModalStatus");
+  const el=document.getElementById("loginStatus");
   if(!el)return;
   el.textContent=text;
-  el.className="modal-status"+(kind==="ok"?" ok":kind==="err"?" err":"");
+  el.className="hint";
+  el.style.color=kind==="ok"?"var(--ok)":kind==="err"?"var(--err)":"";
 }
 function panelLoginStopPoll(){
   if(loginModalTimer){clearInterval(loginModalTimer);loginModalTimer=null}
 }
 function panelLoginOpen(){
-  document.getElementById("loginModalScrim").style.display="flex";
-  document.getElementById("loginAuthUrl").value="";
-  document.getElementById("loginCallbackUrl").value="";
+  document.getElementById("loginModal").classList.add("show");
+  syncLoginRegionUI();
+  document.getElementById("loginAuthURL").value="";
+  document.getElementById("loginCallbackURL").value="";
   loginModalState="";
   panelLoginStart();
 }
 function panelLoginClose(){
   panelLoginStopPoll();
   loginModalState="";
-  document.getElementById("loginModalScrim").style.display="none";
+  document.getElementById("loginModal").classList.remove("show");
 }
-function panelLoginRestart(){
-  if(document.getElementById("loginModalScrim").style.display==="none")return;
-  panelLoginStart();
+function onLoginMaskClick(e){
+  if(e.target===document.getElementById("loginModal"))panelLoginClose();
 }
 async function panelLoginStart(){
   panelLoginStopPoll();
   loginModalState="";
-  document.getElementById("loginAuthUrl").value="";
+  document.getElementById("loginAuthURL").value="";
   panelLoginStatus("正在生成授权链接…");
   try{
-    const d=await api("/login/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({region:panelLoginRealm()})});
+    const d=await api("/login/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({region:panelLoginRegion})});
     if(d.error) throw new Error(d.error);
     if(!d.auth_url||!d.state) throw new Error("登录未返回授权链接");
     loginModalState=d.state;
-    document.getElementById("loginAuthUrl").value=d.auth_url;
+    document.getElementById("loginAuthURL").value=d.auth_url;
     panelLoginStatus("已生成授权链接（realm="+(d.realm||"")+")：点「打开链接」在新标签页完成授权，再把地址栏回调链接粘贴到步骤 2 提交；或等待自动完成。");
     panelLoginTimer();
   }catch(e){
@@ -832,7 +900,7 @@ function panelLoginHandleStatus(d){
   panelLoginStatus("等待浏览器授权…"+(d.message?("（"+d.message+"）"):"")+"完成授权后可把地址栏回调链接粘贴到步骤 2 加速完成。");
 }
 function panelLoginCopy(btn){
-  const el=document.getElementById("loginAuthUrl");
+  const el=document.getElementById("loginAuthURL");
   const u=(el&&el.value||"").trim();
   if(!u){toast("授权链接尚未生成","warn");return}
   const done=()=>toast("已复制授权链接","ok");
@@ -844,12 +912,12 @@ function panelLoginCopy(btn){
   if(btn)btn.blur();
 }
 function panelLoginOpenLink(){
-  const u=(document.getElementById("loginAuthUrl").value||"").trim();
+  const u=(document.getElementById("loginAuthURL").value||"").trim();
   if(!u){toast("授权链接尚未生成","warn");return}
   window.open(u,"_blank");
 }
 async function panelLoginSubmitCallback(btn){
-  const raw=(document.getElementById("loginCallbackUrl").value||"").trim();
+  const raw=(document.getElementById("loginCallbackURL").value||"").trim();
   if(!raw){toast("请先粘贴完整回调链接","warn");return}
   if(!loginModalState){toast("登录尚未开始","warn","请先等待授权链接生成");return}
   busy(btn,true);
@@ -858,7 +926,7 @@ async function panelLoginSubmitCallback(btn){
     if(d.state)loginModalState=d.state;
     panelLoginHandleStatus(d);
     if(d.status==="success"||d.status==="expired"||d.status==="error"){
-      document.getElementById("loginCallbackUrl").value="";
+      document.getElementById("loginCallbackURL").value="";
     }
   }catch(e){
     panelLoginStatus("提交失败："+(e.message||String(e)),"err");
@@ -907,6 +975,8 @@ async function load(force, btn){
     }
     g.innerHTML=accounts.map(card).join("");
     bindCardActions(g);
+    updateFilterCounts(accounts);
+    filterRegion(currentFilter, null);
     renderSummary(accounts);
     lazyLoadCredits(accounts);
     if(force){
@@ -1148,6 +1218,10 @@ async function refreshCredits(idx, btn){
   }
 }
 document.getElementById("keyInput").addEventListener("keydown",e=>{if(e.key==="Enter")saveKey()});
+document.addEventListener("keydown",e=>{
+  if(e.key=="Escape"&&document.getElementById("importModal").classList.contains("show")) closeImportModal();
+  if(e.key=="Escape"&&document.getElementById("loginModal").classList.contains("show")) panelLoginClose();
+});
 /* ===== 模型禁用（v0.12.63）=====
    目录：GET /plugins/trae/models/groups（插件按 variant 聚合 model_cache
    快照；?refresh=1 走 for_auth 同链路实时重发现并落盘）。
