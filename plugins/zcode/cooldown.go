@@ -335,3 +335,97 @@ func handleCooldownClear(req pluginapi.ManagementRequest) map[string]any {
 	removed := clearModelCooldown(authID, body.Model)
 	return map[string]any{"success": true, "removed": removed}
 }
+
+// -----------------------------------------------------------------------------
+// Account-level ladder cooldown (T20 port of R1 zcode/failover.go:22/:45).
+//
+// R1 cools a whole ACCOUNT on failure with an escalating ladder (1 min, then
+// 3 min, then 10 min, stuck at the top tier) and the scheduler refuses to
+// route to a cooling account. The model-scoped table above stays untouched:
+// a ladder entry here means "this credential is rejected upstream", while a
+// model entry means "this model on this credential is throttled". The
+// executor retry loops record both on a rotated failure (noteAccountFailure
+// + recordUpstreamFailure) and clear the ladder entry on success
+// (resetAccountFailover, mirroring R1 executor.go's success reset).
+//
+// Constraint: the ladder lives in cooldown.go (the work-copy equivalent
+// structure) — R2 has no plugins/zcode/failover.go and creating one is out
+// of scope.
+// -----------------------------------------------------------------------------
+
+type accountFailoverEntry struct {
+	failCount int
+	cooldown  time.Time
+	lastError string
+}
+
+var (
+	accountFailoverMu      sync.RWMutex
+	accountFailoverRecords = make(map[string]*accountFailoverEntry)
+)
+
+// accountCooldownDurations is the R1 failover.go:22 ladder verbatim:
+// 1 minute, 3 minutes, 10 minutes (capped at the top tier).
+var accountCooldownDurations = []time.Duration{
+	1 * time.Minute,
+	3 * time.Minute,
+	10 * time.Minute,
+}
+
+// isAccountCoolingDown reports whether the account sits inside its ladder
+// cooldown window (R1 failover.go:isAccountCoolingDown parity).
+func isAccountCoolingDown(authID string) bool {
+	authID = strings.TrimSpace(authID)
+	if authID == "" {
+		return false
+	}
+	accountFailoverMu.RLock()
+	defer accountFailoverMu.RUnlock()
+
+	entry, ok := accountFailoverRecords[authID]
+	if !ok {
+		return false
+	}
+	return time.Now().Before(entry.cooldown)
+}
+
+// noteAccountFailure records one account failure and arms the next ladder
+// tier (R1 failover.go:noteAccountFailure parity). Called by the executor
+// retry loops for every failed attempt, rotatable or not — exactly like R1
+// executor.go does before asking shouldRotateOnUpstreamErr.
+func noteAccountFailure(authID string, statusCode int, errMsg string) {
+	authID = strings.TrimSpace(authID)
+	if authID == "" {
+		return
+	}
+	accountFailoverMu.Lock()
+	defer accountFailoverMu.Unlock()
+
+	entry, ok := accountFailoverRecords[authID]
+	if !ok {
+		entry = &accountFailoverEntry{}
+		accountFailoverRecords[authID] = entry
+	}
+
+	entry.failCount++
+	entry.lastError = errMsg
+
+	tier := entry.failCount - 1
+	if tier >= len(accountCooldownDurations) {
+		tier = len(accountCooldownDurations) - 1
+	}
+	entry.cooldown = time.Now().Add(accountCooldownDurations[tier])
+}
+
+// resetAccountFailover clears the ladder entry after a successful call
+// (R1 failover.go:resetAccountFailover parity).
+func resetAccountFailover(authID string) {
+	authID = strings.TrimSpace(authID)
+	if authID == "" {
+		return
+	}
+	accountFailoverMu.Lock()
+	defer accountFailoverMu.Unlock()
+
+	delete(accountFailoverRecords, authID)
+}

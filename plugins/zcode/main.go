@@ -579,6 +579,25 @@ type executorStreamRequest struct {
 	HostCallbackID string `json:"host_callback_id,omitempty"`
 }
 
+// execAttemptFail is one failed non-stream attempt: the terminal rendering
+// the caller surfaces plus the bookkeeping the retry loop needs. status is
+// the upstream HTTP status (0 when no upstream response completed); body
+// feeds the rotate decision, the ladder and the lifecycle reconcile;
+// recordStatus/publishStatus/publishBody preserve the exact accounting args
+// the single-shot path used; usedOffPeak marks ticket-lane attempts (never
+// rotated); upstreamAttempted marks attempts that reached the upstream (only
+// those arm the ladder / model table).
+type execAttemptFail struct {
+	status            int
+	body              string
+	recordStatus      int
+	publishStatus     int
+	publishBody       string
+	err               error
+	usedOffPeak       bool
+	upstreamAttempted bool
+}
+
 func handleExecExecute(raw []byte) ([]byte, error) {
 	var req pluginapi.ExecutorRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
@@ -591,6 +610,55 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 	upstreamModel := stripProviderPrefix(req.Model)
 	cooldownModel := requestModelForCooldown(req.Model, req.Metadata)
 	started := time.Now()
+
+	// Per-request account-failover loop (T20): port of R1
+	// zcode/executor.go:48's fixed `for attempt < 3`, bounded by the
+	// configurable retry_on_4xx budget (default 3, same as R1's fixed 3).
+	// On an account-level 4xx/429 the same request is retried against the
+	// next account; business 400, 5xx/0/402, body-build failures and
+	// off-peak lane failures terminate the loop with the last error.
+	// Accounting runs once, against the credential that actually served
+	// (or finally failed) the request.
+	budget := loadedRetryOn4xx()
+	curSA := sa
+	curAuthID := req.AuthID
+	for attempt := 0; ; attempt++ {
+		completion, fail := execExecuteAttempt(curSA, &req, upstreamModel, cooldownModel, started)
+		if fail == nil {
+			resetAccountFailover(curAuthID)
+			publishUsage(req.Model, upstreamModel, curSA.Account.UID, started, usageDetailFromCompletion(completion), false, 0, "")
+			invalidateAccountCredits(curAuthID, curSA.Account.UID)
+			return okEnvelope(pluginapi.ExecutorResponse{Payload: completion})
+		}
+		// R1 executor.go parity: every upstream failure arms the ladder;
+		// the model pair is recorded in parallel (overlay rule).
+		if fail.upstreamAttempted {
+			noteAccountFailure(curAuthID, fail.status, fail.body)
+			recordUpstreamFailure(curAuthID, cooldownModel, fail.recordStatus, fail.body)
+		}
+		if fail.usedOffPeak || !shouldRotateOnUpstreamErr(fail.status, fail.body) || attempt >= budget {
+			publishUsage(req.Model, upstreamModel, curSA.Account.UID, started, usage.Detail{}, true, fail.publishStatus, fail.publishBody)
+			reconcileAfterExecutorError(curAuthID, fail.status, fail.body)
+			return nil, fail.err
+		}
+		nextID, nextSA, hasNext := pickNextAuthFn(curAuthID, cooldownModel)
+		if !hasNext || nextSA == nil {
+			publishUsage(req.Model, upstreamModel, curSA.Account.UID, started, usage.Detail{}, true, fail.publishStatus, fail.publishBody)
+			reconcileAfterExecutorError(curAuthID, fail.status, fail.body)
+			return nil, fail.err
+		}
+		curSA = nextSA
+		curAuthID = nextID
+	}
+}
+
+// execExecuteAttempt runs one non-stream attempt against a single account:
+// the historical single-shot flow (off-peak acquire, body build, signed
+// send loop, plane/captcha fallback, translate, decode) with all accounting
+// stripped out — the caller (handleExecExecute) records ladder/model
+// cooldown per failed attempt and publishes usage exactly once. A nil fail
+// means success.
+func execExecuteAttempt(sa *storedAuth, req *pluginapi.ExecutorRequest, upstreamModel, cooldownModel string, started time.Time) ([]byte, *execAttemptFail) {
 	authUID := sa.Account.UID
 
 	// Off-peak lane: acquire a ready ticket before the first send (the
@@ -608,8 +676,8 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 		}
 		ticket, terr := offPeakAcquireTicket(sa, offTaskID, budget)
 		if terr != nil {
-			publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, "off-peak acquire: "+terr.Error())
-			return nil, upstreamStatusError(http.StatusServiceUnavailable, terr)
+			msg := "off-peak acquire: " + terr.Error()
+			return nil, &execAttemptFail{status: http.StatusServiceUnavailable, body: msg, publishStatus: 0, publishBody: msg, err: upstreamStatusError(http.StatusServiceUnavailable, terr)}
 		}
 		currentTicketID = ticket.TicketID
 		// Settle whatever ticket the round ended on — a 3102 retake swaps
@@ -623,21 +691,17 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 	if route.anthropic {
 		anthropicBody, terr := translateOpenAIToAnthropicBody(req.Payload, upstreamModel, false, authProviderFor(sa), sa.Auth.DeviceMid, time.Now())
 		if terr != nil {
-			publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, "body build: "+terr.Error())
-			return nil, fmt.Errorf("body build: %w", terr)
+			msg := "body build: " + terr.Error()
+			return nil, &execAttemptFail{body: msg, publishStatus: 0, publishBody: msg, err: fmt.Errorf("body build: %w", terr)}
 		}
 		body = string(anthropicBody)
 	} else {
 		var berr error
 		body, berr = buildChatBody(req.Payload, upstreamModel, false)
 		if berr != nil {
-			publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, "body build: "+berr.Error())
-			return nil, fmt.Errorf("body build: %w", berr)
+			msg := "body build: " + berr.Error()
+			return nil, &execAttemptFail{body: msg, publishStatus: 0, publishBody: msg, err: fmt.Errorf("body build: %w", berr)}
 		}
-	}
-	if err != nil {
-		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, "body build: "+err.Error())
-		return nil, fmt.Errorf("body build: %w", err)
 	}
 	buildReq := func() (*http.Request, error) {
 		httpReq, err := http.NewRequest(http.MethodPost, route.endpoint, strings.NewReader(body))
@@ -664,15 +728,14 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 	for attempt := 0; ; attempt++ {
 		stream, sc, hdrs, serr := sendChatWithSigning(sa, buildReq)
 		if serr != nil {
-			publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, serr.Error())
-			return nil, fmt.Errorf("http_error: %w", serr)
+			msg := serr.Error()
+			return nil, &execAttemptFail{body: msg, publishStatus: 0, publishBody: msg, err: fmt.Errorf("http_error: %w", serr)}
 		}
 		bodyBytes, rerr := io.ReadAll(newHostStreamReader(stream))
 		stream.Close()
 		if rerr != nil {
-			publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, rerr.Error())
-			recordUpstreamFailure(req.AuthID, cooldownModel, 0, rerr.Error())
-			return nil, upstreamReadError(rerr)
+			msg := rerr.Error()
+			return nil, &execAttemptFail{body: msg, recordStatus: 0, publishStatus: 0, publishBody: msg, err: upstreamReadError(rerr), upstreamAttempted: true}
 		}
 		if sc < 400 {
 			payload, statusCode, respHeaders = bodyBytes, sc, hdrs
@@ -733,10 +796,7 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 				payload, statusCode, respHeaders, route = fbPayload, fbSC, fbHdrs, fbRoute
 				settled = true
 			} else if fbSC > 0 {
-				publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, fbSC, fbFailBody)
-				recordUpstreamFailure(req.AuthID, cooldownModel, fbSC, fbFailBody)
-				reconcileAfterExecutorError(req.AuthID, fbSC, fbFailBody)
-				return nil, upstreamStatusError(fbSC, routeChatError(fbRoute, sa, fbSC, fbHdrs, fbFailBody))
+				return nil, &execAttemptFail{status: fbSC, body: fbFailBody, recordStatus: fbSC, publishStatus: fbSC, publishBody: fbFailBody, err: upstreamStatusError(fbSC, routeChatError(fbRoute, sa, fbSC, fbHdrs, fbFailBody)), usedOffPeak: route.offPeakTicketID != "", upstreamAttempted: true}
 			}
 		}
 		if !settled && route.anthropic {
@@ -750,22 +810,16 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 					payload, statusCode, respHeaders, route = crPayload, crSC, crHdrs, crRoute
 					settled = true
 				} else if crSC > 0 {
-					publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, crSC, crFailBody)
-					recordUpstreamFailure(req.AuthID, cooldownModel, crSC, crFailBody)
-					reconcileAfterExecutorError(req.AuthID, crSC, crFailBody)
-					return nil, upstreamStatusError(crSC, routeChatError(crRoute, sa, crSC, crHdrs, crFailBody))
+					return nil, &execAttemptFail{status: crSC, body: crFailBody, recordStatus: crSC, publishStatus: crSC, publishBody: crFailBody, err: upstreamStatusError(crSC, routeChatError(crRoute, sa, crSC, crHdrs, crFailBody)), usedOffPeak: route.offPeakTicketID != "", upstreamAttempted: true}
 				}
 			}
 		}
 		if !settled {
-			publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, string(payload))
-			recordUpstreamFailure(req.AuthID, cooldownModel, statusCode, string(payload))
-			reconcileAfterExecutorError(req.AuthID, statusCode, string(payload))
 			cerr := routeChatError(route, sa, statusCode, respHeaders, string(payload))
 			if hint := noPackageNoJWTHint(sa, statusCode, string(payload)); hint != "" {
 				cerr = fmt.Errorf("%v — %s", cerr, hint)
 			}
-			return nil, upstreamStatusError(statusCode, cerr)
+			return nil, &execAttemptFail{status: statusCode, body: string(payload), recordStatus: statusCode, publishStatus: statusCode, publishBody: string(payload), err: upstreamStatusError(statusCode, cerr), usedOffPeak: route.offPeakTicketID != "", upstreamAttempted: true}
 		}
 	}
 	if route.anthropic {
@@ -773,21 +827,17 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 		// gate the coding-plan path applies to its upstream body.
 		translated, terr := translateAnthropicResponseToOpenAI(payload, req.Model)
 		if terr != nil {
-			publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, terr.Error())
-			recordUpstreamFailure(req.AuthID, cooldownModel, 0, terr.Error())
-			return nil, terr
+			msg := terr.Error()
+			return nil, &execAttemptFail{status: statusCode, body: msg, recordStatus: 0, publishStatus: statusCode, publishBody: msg, err: terr, usedOffPeak: route.offPeakTicketID != "", upstreamAttempted: true}
 		}
 		payload = translated
 	}
 	completion, err := decodeNonStreamCompletion(payload, req.Model)
 	if err != nil {
-		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, err.Error())
-		recordUpstreamFailure(req.AuthID, cooldownModel, 0, err.Error())
-		return nil, err
+		msg := err.Error()
+		return nil, &execAttemptFail{status: statusCode, body: msg, recordStatus: 0, publishStatus: statusCode, publishBody: msg, err: err, usedOffPeak: route.offPeakTicketID != "", upstreamAttempted: true}
 	}
-	publishUsage(req.Model, upstreamModel, authUID, started, usageDetailFromCompletion(completion), false, 0, "")
-	invalidateAccountCredits(req.AuthID, authUID)
-	return okEnvelope(pluginapi.ExecutorResponse{Payload: completion})
+	return completion, nil
 }
 
 func handleExecStream(raw []byte) ([]byte, error) {
@@ -803,6 +853,17 @@ func handleExecStream(raw []byte) ([]byte, error) {
 	cooldownModel := requestModelForCooldown(req.Model, req.Metadata)
 	started := time.Now()
 	authUID := sa.Account.UID
+
+	headers := streamHeaders()
+	sseFramed := clientNeedsSSEFrame(req.Metadata)
+
+	// No async stream id → fall back to synchronous chunk collection, with
+	// the same per-request account-failover loop as the non-stream path
+	// (T20; the async pump below stays single-shot: once chunks flow a
+	// retry would be visible to the client).
+	if req.StreamID == "" {
+		return handleExecStreamSync(&req, sa, upstreamModel, cooldownModel, started, authUID, headers, sseFramed)
+	}
 
 	// Off-peak lane: acquire a ready ticket first (same contract as the
 	// non-stream path). Streaming cannot retry a failed send
@@ -847,35 +908,6 @@ func handleExecStream(raw []byte) ([]byte, error) {
 		return nil, fmt.Errorf("body build: %w", err)
 	}
 
-	headers := streamHeaders()
-	sseFramed := clientNeedsSSEFrame(req.Metadata)
-
-	// No async stream id → fall back to synchronous chunk collection.
-	if req.StreamID == "" {
-		collector := &sseUsageCollector{}
-		startPlaneFallback := func(status int, failBody string, hdrs http.Header) (chatRoute, string, bool) {
-			// Captcha retry first (captcha_pool.go): same route, same body,
-			// pool token attached — a challenged start-plane call needs no
-			// re-translation, unlike the entitlement fallback below.
-			if crRoute, ok := captchaRetryRoute(status, failBody, hdrs); ok {
-				return crRoute, body, true
-			}
-			return startPlaneFallbackBody(sa, route, status, failBody, bodyRaw, upstreamModel, true)
-		}
-		chunks, statusCode, errCollect := collectUpstreamStream(body, sa, route, sseFramed, collector, upstreamModel, startPlaneFallback)
-		if currentTicketID != "" {
-			offPeakSettleBestEffort(sa, currentTicketID)
-		}
-		if errCollect != nil {
-			publishUsage(req.Model, upstreamModel, authUID, started, collector.detail(), true, statusCode, errCollect.Error())
-			recordUpstreamFailure(req.AuthID, cooldownModel, statusCode, errCollect.Error())
-			return nil, errCollect
-		}
-		publishUsage(req.Model, upstreamModel, authUID, started, collector.detail(), false, 0, "")
-		invalidateAccountCredits(req.AuthID, authUID)
-		return okEnvelope(streamResponse{Headers: headers, Chunks: chunks})
-	}
-
 	// Async: return immediately with empty chunks. A goroutine pumps the upstream
 	// and emits each chunk via host.stream.emit so the client sees true streaming.
 	// Use context.Background() (not nil) so the request can be cancelled when the
@@ -900,6 +932,96 @@ func handleExecStream(raw []byte) ([]byte, error) {
 		}
 	}()
 	return okEnvelope(streamResponse{Headers: headers})
+}
+
+// handleExecStreamSync is the synchronous stream path (no async stream id):
+// drain the upstream SSE and return the cleaned chunks. Each attempt against
+// one account rebuilds its own route and body (the wire dialect follows the
+// account's plan), acquires and settles its own off-peak ticket, and runs
+// the historical collect — accounting runs once at the end. Ticket-lane
+// attempts never rotate (off-peak semantics unchanged).
+func handleExecStreamSync(req *executorStreamRequest, sa *storedAuth, upstreamModel, cooldownModel string, started time.Time, authUID string, headers http.Header, sseFramed bool) ([]byte, error) {
+	bodyRaw := req.Payload
+	if len(bodyRaw) == 0 {
+		bodyRaw = req.OriginalRequest
+	}
+	budget := loadedRetryOn4xx()
+	curSA := sa
+	curAuthID := req.AuthID
+	curUID := authUID
+	for attempt := 0; ; attempt++ {
+		var route chatRoute
+		var currentTicketID string
+		if offPeakEligible(curSA) {
+			ticket, terr := offPeakAcquireTicket(curSA, newOffPeakTaskID(), offPeakWaitBudget())
+			if terr != nil {
+				publishUsage(req.Model, upstreamModel, curUID, started, usage.Detail{}, true, 0, "off-peak acquire: "+terr.Error())
+				return nil, upstreamStatusError(http.StatusServiceUnavailable, terr)
+			}
+			currentTicketID = ticket.TicketID
+			route = offPeakRouteFor(curSA, ticket.TicketID)
+		} else {
+			route = routeFor(curSA, upstreamModel)
+		}
+		var body string
+		if route.anthropic {
+			anthropicBody, terr := translateOpenAIToAnthropicBody(bodyRaw, upstreamModel, true, authProviderFor(curSA), curSA.Auth.DeviceMid, time.Now())
+			if terr != nil {
+				if currentTicketID != "" {
+					offPeakSettleBestEffort(curSA, currentTicketID)
+				}
+				publishUsage(req.Model, upstreamModel, curUID, started, usage.Detail{}, true, 0, "body build: "+terr.Error())
+				return nil, fmt.Errorf("body build: %w", terr)
+			}
+			body = string(anthropicBody)
+		} else {
+			var berr error
+			body, berr = buildChatBody(bodyRaw, upstreamModel, true)
+			if berr != nil {
+				if currentTicketID != "" {
+					offPeakSettleBestEffort(curSA, currentTicketID)
+				}
+				publishUsage(req.Model, upstreamModel, curUID, started, usage.Detail{}, true, 0, "body build: "+berr.Error())
+				return nil, fmt.Errorf("body build: %w", berr)
+			}
+		}
+		collector := &sseUsageCollector{}
+		attemptSA, attemptRoute, attemptBody := curSA, route, body
+		startPlaneFallback := func(status int, failBody string, hdrs http.Header) (chatRoute, string, bool) {
+			// Captcha retry first (captcha_pool.go): same route, same body,
+			// pool token attached — a challenged start-plane call needs no
+			// re-translation, unlike the entitlement fallback below.
+			if crRoute, ok := captchaRetryRoute(status, failBody, hdrs); ok {
+				return crRoute, attemptBody, true
+			}
+			return startPlaneFallbackBody(attemptSA, attemptRoute, status, failBody, bodyRaw, upstreamModel, true)
+		}
+		chunks, statusCode, errCollect := collectUpstreamStream(body, curSA, route, sseFramed, collector, upstreamModel, startPlaneFallback)
+		if currentTicketID != "" {
+			offPeakSettleBestEffort(curSA, currentTicketID)
+		}
+		if errCollect == nil {
+			resetAccountFailover(curAuthID)
+			publishUsage(req.Model, upstreamModel, curUID, started, collector.detail(), false, 0, "")
+			invalidateAccountCredits(curAuthID, curUID)
+			return okEnvelope(streamResponse{Headers: headers, Chunks: chunks})
+		}
+		failBody := errCollect.Error()
+		noteAccountFailure(curAuthID, statusCode, failBody)
+		recordUpstreamFailure(curAuthID, cooldownModel, statusCode, failBody)
+		if currentTicketID != "" || !shouldRotateOnUpstreamErr(statusCode, failBody) || attempt >= budget {
+			publishUsage(req.Model, upstreamModel, curUID, started, collector.detail(), true, statusCode, failBody)
+			return nil, errCollect
+		}
+		nextID, nextSA, hasNext := pickNextAuthFn(curAuthID, cooldownModel)
+		if !hasNext || nextSA == nil {
+			publishUsage(req.Model, upstreamModel, curUID, started, collector.detail(), true, statusCode, failBody)
+			return nil, errCollect
+		}
+		curSA = nextSA
+		curAuthID = nextID
+		curUID = nextSA.Account.UID
+	}
 }
 
 // stripProviderPrefix removes the leading "zcode/" (or any "<provider>/")

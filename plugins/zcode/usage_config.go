@@ -64,6 +64,14 @@ func configure(raw []byte) {
 	nextClaimPlanID := ""
 	nextClaimPoll, nextClaimCooldown := 0, 0
 
+	// retry_on_4xx: per-request account-failover budget (T20). Applied ONLY
+	// when the key is present in config_yaml: a valid value is clamped to
+	// [0, 10] and applied; an unparseable value resets to the default 3. An
+	// absent key keeps the current budget so an unrelated reconfigure never
+	// silently lifts a `retry_on_4xx: 0` kill switch.
+	nextRetryOn4xx := retryOn4xxDefault
+	retryOn4xxSeen := false
+
 	if len(raw) > 0 {
 		var req struct {
 			ConfigYAML []byte `json:"config_yaml"`
@@ -113,6 +121,14 @@ func configure(raw []byte) {
 						nextOffPeakMaxWait = time.Duration(secs) * time.Second
 					}
 				}
+				if v, present := m["retry_on_4xx"]; present {
+					retryOn4xxSeen = true
+					if n, ok := parseRetryOn4xxLine("retry_on_4xx: " + configScalarString(v)); ok {
+						nextRetryOn4xx = clampRetryOn4xx(n)
+					} else {
+						nextRetryOn4xx = retryOn4xxDefault
+					}
+				}
 			}
 			for _, line := range strings.Split(string(req.ConfigYAML), "\n") {
 				line = strings.TrimSpace(line)
@@ -132,6 +148,14 @@ func configure(raw []byte) {
 					v := strings.Trim(strings.TrimSpace(strings.TrimPrefix(line, "offpeak_max_wait:")), "\"'")
 					if secs, perr := strconv.ParseInt(v, 10, 64); perr == nil && secs > 0 {
 						nextOffPeakMaxWait = time.Duration(secs) * time.Second
+					}
+				}
+				if strings.HasPrefix(line, "retry_on_4xx:") {
+					retryOn4xxSeen = true
+					if n, ok := parseRetryOn4xxLine(line); ok {
+						nextRetryOn4xx = clampRetryOn4xx(n)
+					} else {
+						nextRetryOn4xx = retryOn4xxDefault
 					}
 				}
 				if strings.HasPrefix(line, "usage_report_url:") {
@@ -202,6 +226,10 @@ func configure(raw []byte) {
 	identityMu.Unlock()
 
 	configureOffPeak(nextOffPeak, nextOffPeakMaxWait)
+
+	if retryOn4xxSeen {
+		setRetryOn4xx(nextRetryOn4xx)
+	}
 
 	// management key: config_yaml > env > keep existing.
 	if nextMgmtKey == "" {
