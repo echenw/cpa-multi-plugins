@@ -174,6 +174,12 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
       <input id="cbPaste" type="text" placeholder="http://127.0.0.1:&lt;port&gt;/authorize?isRedirect=true&authCodeInfo=…" class="field-input" style="flex:1">
       <button onclick="submitCallbackURL(this)">完成登录</button>
     </div>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
+      <button onclick="panelLoginStart(this)">授权登录</button>
+      <label class="toggle"><input type="radio" name="loginRealm" value="intl" checked> Intl</label>
+      <label class="toggle"><input type="radio" name="loginRealm" value="cn"> CN</label>
+      <span class="toggle">默认 Intl；新账号登录后本页自动刷新</span>
+    </div>
   </div>
   <div class="summary card" id="summaryBox" style="display:none"></div>
   <div class="card" id="modelCtlCard" style="display:none;margin:0 0 14px">
@@ -695,6 +701,39 @@ async function submitCallbackURL(btn){
     toast("提交失败","err",e.message);
   }
   busy(btn,false);
+}
+function panelLoginRealm(){
+  const el=document.querySelector('input[name="loginRealm"]:checked');
+  return (el&&el.value==="cn")?"cn":"intl";
+}
+async function panelLoginStart(btn){
+  const known=new Set((lastAccounts||[]).map(a=>a.auth_index).filter(Boolean));
+  busy(btn,true);
+  try{
+    const d=await api("/login/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({region:panelLoginRealm()})});
+    if(d.error) throw new Error(d.error);
+    if(!d.auth_url) throw new Error("登录未返回授权链接");
+    window.open(d.auth_url,"_blank");
+    toast("已打开授权页","ok","realm="+(d.realm||"")+" · 完成浏览器授权后本页会自动刷新");
+    panelLoginPoll(known,Date.now());
+  }catch(e){toast("发起登录失败","err",e.message||String(e))}
+  busy(btn,false);
+}
+async function panelLoginPoll(known, t0){
+  for(let i=0;i<220;i++){
+    await new Promise(r=>setTimeout(r,4000));
+    try{
+      const d=await api("/accounts");
+      let intl=[]; try{intl=(await api("/intl/accounts")).accounts||[]}catch(_){}
+      const all=[...((d&&d.accounts)||[]),...intl];
+      if(all.some(a=>a.auth_index&&!known.has(a.auth_index))){
+        await load(false);
+        toast("登录完成","ok","新账号已同步");
+        return;
+      }
+    }catch(_){/* keep polling */}
+    if(Date.now()-t0>15*60*1000){toast("登录等待超时","warn","15 分钟未检测到新账号，可手动点刷新数据");return}
+  }
 }
 async function load(force, btn){
   const g=document.getElementById("grid");

@@ -2,25 +2,26 @@ package main
 
 import "testing"
 
-// TestSplitBuildPinWiring verifies the split-channel build injection chain
-// end-to-end: run once WITHOUT ldflags (unified flavor: pin empty, default
-// stays intl per T24) and once WITH
+// TestSplitBuildPinWiring verifies the request-carried default is intl
+// regardless of the legacy build pin: the pin is ignored since config-file
+// realm switching was deleted. Run once WITHOUT ldflags (unified flavor)
+// and once WITH
 //
 //	go test -ldflags "-X main.pluginVariantPin=intl" -run TestSplitBuildPinWiring
 //
-// (split flavor: the sticky login-variant default must equal the pin).
+// (split flavor: the default must still be intl).
 func TestSplitBuildPinWiring(t *testing.T) {
-	switch pluginVariantPin {
-	case "":
-		if got := loadedLoginVariant(); got != variantIntl {
-			t.Fatalf("unified flavor: login default = %q, want %q", got, variantIntl)
+	if defaultRequestLoginVariant != variantIntl {
+		t.Fatalf("default = %q, want %q", defaultRequestLoginVariant, variantIntl)
+	}
+	for _, raw := range []string{`{}`, ``} {
+		got, err := resolveRequestLoginVariant([]byte(raw))
+		if err != nil {
+			t.Fatalf("raw %q: %v", raw, err)
 		}
-	case variantCN, variantSolo, variantIntl:
-		if got := loadedLoginVariant(); got != pluginVariantPin {
-			t.Fatalf("split flavor pin=%s: login default = %q, want the pin", pluginVariantPin, got)
+		if got != variantIntl {
+			t.Fatalf("raw %q: got %q, want intl default (pin %q ignored)", raw, got, pluginVariantPin)
 		}
-	default:
-		t.Fatalf("invalid pin %q leaked through", pluginVariantPin)
 	}
 }
 

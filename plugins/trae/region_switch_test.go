@@ -11,7 +11,7 @@ import (
 
 func TestRequestLoginVariantDefaultsIntl(t *testing.T) {
 	for _, raw := range []string{`{}`, ``, `{"State":"x"}`, `not-json`} {
-		got, err := resolveRequestLoginVariant([]byte(raw), "")
+		got, err := resolveRequestLoginVariant([]byte(raw))
 		if err != nil {
 			t.Fatalf("raw %q: unexpected error %v", raw, err)
 		}
@@ -30,7 +30,7 @@ func TestRequestLoginVariantExplicitCN(t *testing.T) {
 		`{"region":"CN"}`,
 		`{"region":" cn "}`,
 	} {
-		got, err := resolveRequestLoginVariant([]byte(raw), variantIntl)
+		got, err := resolveRequestLoginVariant([]byte(raw))
 		if err != nil {
 			t.Fatalf("raw %q: unexpected error %v", raw, err)
 		}
@@ -40,54 +40,37 @@ func TestRequestLoginVariantExplicitCN(t *testing.T) {
 	}
 }
 
-func TestRequestLoginVariantStickyFallback(t *testing.T) {
-	for _, fb := range []string{variantCN, variantSolo, variantIntl} {
-		got, err := resolveRequestLoginVariant([]byte(`{}`), fb)
+func TestRequestLoginVariantExplicitIntl(t *testing.T) {
+	for _, raw := range []string{
+		`{"region":"intl"}`,
+		`{"login_region":"intl"}`,
+		`{"variant":"intl"}`,
+	} {
+		got, err := resolveRequestLoginVariant([]byte(raw))
 		if err != nil {
-			t.Fatalf("fallback %q: unexpected error %v", fb, err)
+			t.Fatalf("raw %q: unexpected error %v", raw, err)
 		}
-		if got != fb {
-			t.Fatalf("fallback %q: got %q, want sticky fallback", fb, got)
+		if got != variantIntl {
+			t.Fatalf("raw %q: got %q, want %q", raw, got, variantIntl)
 		}
 	}
 }
 
 func TestRequestLoginVariantIllegalRejected(t *testing.T) {
-	before := loadedLoginVariant()
-	for _, raw := range []string{`{"region":"eu"}`, `{"login_region":"global"}`, `{"variant":"us"}`} {
-		if _, err := resolveRequestLoginVariant([]byte(raw), variantIntl); err == nil {
+	for _, raw := range []string{`{"region":"eu"}`, `{"login_region":"global"}`, `{"variant":"us"}`, `{"region":"solo"}`} {
+		if _, err := resolveRequestLoginVariant([]byte(raw)); err == nil {
 			t.Fatalf("raw %q: want explicit rejection, got nil", raw)
 		} else if !strings.Contains(err.Error(), "invalid login region") {
 			t.Fatalf("raw %q: error %q should name the invalid region", raw, err)
-		}
-		if got := loadedLoginVariant(); got != before {
-			t.Fatalf("raw %q: stored selection moved %q -> %q on rejection", raw, before, got)
 		}
 	}
 }
 
 func TestHandleStartLoginRejectsIllegalRegion(t *testing.T) {
-	before := loadedLoginVariant()
 	if _, err := handleStartLogin([]byte(`{"region":"mars"}`)); err == nil {
 		t.Fatal("handleStartLogin with illegal region should fail before any network I/O")
 	} else if !strings.Contains(err.Error(), "invalid login region") {
 		t.Fatalf("error %q should name the invalid region", err)
-	}
-	if got := loadedLoginVariant(); got != before {
-		t.Fatalf("stored selection moved %q -> %q on rejection", before, got)
-	}
-}
-
-func TestLoginRegionSelectorPayload(t *testing.T) {
-	sel := loginRegionSelectorPayload()
-	if len(sel.Options) != 2 || sel.Options[0] != variantCN || sel.Options[1] != variantIntl {
-		t.Fatalf("options = %v, want [cn intl]", sel.Options)
-	}
-	if sel.Default != variantIntl {
-		t.Fatalf("default = %q, want intl", sel.Default)
-	}
-	if sel.Current != normalizeVariant(loadedLoginVariant()) {
-		t.Fatalf("current = %q, want sticky %q", sel.Current, loadedLoginVariant())
 	}
 }
 
@@ -106,9 +89,17 @@ func TestExistingAccountVariantsUnchanged(t *testing.T) {
 	}
 }
 
-func TestManagementLoginRegionEndpoint(t *testing.T) {
+func countInflightLogins() int {
+	n := 0
+	loginStates.Range(func(_, _ any) bool { n++; return true })
+	intlloginStates.Range(func(_, _ any) bool { n++; return true })
+	return n
+}
+
+func postPanelLoginStart(t *testing.T, body string) (int, map[string]any) {
+	t.Helper()
 	base := loadedManagementBasePath() + "/plugins/" + providerName
-	req, err := json.Marshal(pluginapi.ManagementRequest{Method: http.MethodGet, Path: base + "/login/region"})
+	req, err := json.Marshal(pluginapi.ManagementRequest{Method: http.MethodPost, Path: base + "/login/start", Body: []byte(body)})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -124,17 +115,80 @@ func TestManagementLoginRegionEndpoint(t *testing.T) {
 	if err := json.Unmarshal(env.Result, &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, body=%s", resp.StatusCode, resp.Body)
+	var payload map[string]any
+	if err := json.Unmarshal(resp.Body, &payload); err != nil {
+		t.Fatalf("decode payload: %v (body=%s)", err, resp.Body)
 	}
-	var sel loginRegionSelector
-	if err := json.Unmarshal(resp.Body, &sel); err != nil {
-		t.Fatalf("decode selector: %v (body=%s)", err, resp.Body)
+	return resp.StatusCode, payload
+}
+
+func stubLoginStart(t *testing.T) (called *bool, gotRealm *string) {
+	t.Helper()
+	orig := loginStartForRealm
+	called = new(bool)
+	gotRealm = new(string)
+	loginStartForRealm = func(_ []byte, realm string) (string, error) {
+		*called = true
+		*gotRealm = realm
+		return "https://auth.example/start?realm=" + realm, nil
 	}
-	if len(sel.Options) != 2 || sel.Options[0] != "cn" || sel.Options[1] != "intl" {
-		t.Fatalf("options = %v, want [cn intl]", sel.Options)
+	t.Cleanup(func() { loginStartForRealm = orig })
+	return called, gotRealm
+}
+
+func TestPanelLoginStartDefaultsIntl(t *testing.T) {
+	for _, body := range []string{``, `{}`, `{"State":"x"}`} {
+		called, gotRealm := stubLoginStart(t)
+		before := countInflightLogins()
+		status, payload := postPanelLoginStart(t, body)
+		if status != http.StatusOK {
+			t.Fatalf("body %q: status=%d payload=%v, want 200", body, status, payload)
+		}
+		if !*called || *gotRealm != variantIntl {
+			t.Fatalf("body %q: start called=%v realm=%q, want intl", body, *called, *gotRealm)
+		}
+		if payload["realm"] != variantIntl {
+			t.Fatalf("body %q: realm=%v, want intl", body, payload["realm"])
+		}
+		if payload["auth_url"] != "https://auth.example/start?realm=intl" {
+			t.Fatalf("body %q: auth_url=%v", body, payload["auth_url"])
+		}
+		if got := countInflightLogins(); got != before {
+			t.Fatalf("body %q: stubbed start leaked %d login state(s)", body, got-before)
+		}
 	}
-	if sel.Default != "intl" {
-		t.Fatalf("default = %q, want intl", sel.Default)
+}
+
+func TestPanelLoginStartCNRespected(t *testing.T) {
+	for _, body := range []string{`{"region":"cn"}`, `{"variant":"cn"}`, `{"login_region":"cn"}`} {
+		called, gotRealm := stubLoginStart(t)
+		status, payload := postPanelLoginStart(t, body)
+		if status != http.StatusOK {
+			t.Fatalf("body %q: status=%d payload=%v, want 200", body, status, payload)
+		}
+		if !*called || *gotRealm != variantCN {
+			t.Fatalf("body %q: start called=%v realm=%q, want cn", body, *called, *gotRealm)
+		}
+		if payload["realm"] != variantCN {
+			t.Fatalf("body %q: realm=%v, want cn", body, payload["realm"])
+		}
+	}
+}
+
+func TestPanelLoginStartInvalid400NothingStarted(t *testing.T) {
+	called, _ := stubLoginStart(t)
+	before := countInflightLogins()
+	status, payload := postPanelLoginStart(t, `{"region":"mars"}`)
+	if status != http.StatusBadRequest {
+		t.Fatalf("status=%d payload=%v, want 400", status, payload)
+	}
+	if _, ok := payload["error"]; !ok {
+		t.Fatalf("payload=%v, want error key", payload)
+	}
+	if *called {
+		t.Fatal("invalid region must not start a login")
+	}
+	if got := countInflightLogins(); got != before {
+		t.Fatalf("inflight logins moved %d -> %d on rejection", before, got)
 	}
 }

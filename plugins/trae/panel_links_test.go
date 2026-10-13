@@ -32,3 +32,25 @@ func TestIntlPanelSwitchLinkIsAbsolute(t *testing.T) {
 		t.Errorf("intl panel must link the trae plugin panel by absolute path")
 	}
 }
+
+// Panel authorize-login: the live unified panel carries the 授权登录 button
+// + CN/Intl toggle (default Intl) wired to POST /login/start. The legacy
+// intl_panel.html (split-binary trae-intl deployments only) stays untouched.
+func TestPanelAuthorizeLoginUI(t *testing.T) {
+	html := string(panelHTML)
+	if !strings.Contains(html, "授权登录") {
+		t.Errorf("unified panel must carry the authorize-login button")
+	}
+	if !strings.Contains(html, `name="loginRealm"`) {
+		t.Errorf("unified panel must carry the CN/Intl realm toggle")
+	}
+	if !strings.Contains(html, `value="intl" checked`) {
+		t.Errorf("realm toggle must default to Intl")
+	}
+	if !strings.Contains(html, "/login/start") {
+		t.Errorf("panel JS must call POST /login/start")
+	}
+	if strings.Contains(string(intlpanelHTML), "授权登录") {
+		t.Errorf("legacy intl panel must stay untouched (no authorize-login button)")
+	}
+}

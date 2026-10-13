@@ -37,7 +37,7 @@ import (
 var modelGroupVariantOrder = []string{"cn", "solo", "intl"}
 
 // modelGroupVariantLabel renders the human-facing variant title. Keep in sync
-// with the login_variant enum description in main.go and the panel badges.
+// with the panel badges.
 func modelGroupVariantLabel(variant string) string {
 	switch variant {
 	case "cn":

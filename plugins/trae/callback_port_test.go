@@ -33,7 +33,7 @@ func TestConfigureCallbackPort(t *testing.T) {
 		{"negative ignored", "callback_port: -1", -1},
 		{"garbage ignored", "callback_port: abc", -1},
 		{"empty ignored", "callback_port:", -1},
-		{"unrelated line", "login_variant: cn", -1},
+		{"unrelated line", "callback_bind: 127.0.0.1", -1},
 	}
 
 	for _, tc := range cases {

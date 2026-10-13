@@ -122,7 +122,7 @@ const (
 	// Variant values for the merged plugin (v0.12.0): cn = Trae Code CN
 	// (authFrom "trae", IDE_PC), solo = Trae SOLO CN (authFrom "solo",
 	// SOLO_PC, hideSaasLogin). Variant is stored per auth file and chosen
-	// for NEW logins via login_variant config.
+	// for NEW logins via the request-carried region.
 	oauthAuthFrom      = "trae"   // cn variant (kept for reference)
 	oauthPlatformCode  = "IDE_PC" // cn variant
 	oauthHideSaasLogin = false    // cn variant
@@ -343,7 +343,7 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 
 	case pluginabi.MethodModelStatic:
 		// Single union catalog for all variants (v0.12.2) — model.static must
-		// not depend on login_variant, which only controls NEW logins.
+		// not depend on the login realm, which only controls NEW logins.
 		return handleModelStatic(request)
 
 	case pluginabi.MethodModelForAuth:
@@ -369,10 +369,9 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 		return handleParseAuth(request)
 
 	case pluginabi.MethodAuthLoginStart:
-		// T24: route per request-carried region (default intl); the sticky
-		// login_variant config is the fallback only. Illegal values are
-		// rejected explicitly with the stored selection untouched.
-		lv, err := resolveRequestLoginVariant(request, loadedLoginVariant())
+		// Route per request-carried region (default intl). Illegal values
+		// are rejected explicitly before any network I/O.
+		lv, err := resolveRequestLoginVariant(request)
 		if err != nil {
 			return errorEnvelope("invalid_region", err.Error()), nil
 		}
@@ -382,9 +381,8 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 		return startLoginWithVariant(request, lv)
 
 	case pluginabi.MethodAuthLoginPoll:
-		// Route by where the state lives (v0.12.3) — the login_variant global
-		// can flip mid-flight on a bare Reconfigure, which would send an Intl
-		// poll to the CN handler (or vice versa) and fail with "unknown state".
+		// Route by where the state lives — an Intl poll goes to the Intl
+		// handler (or vice versa) and fails with "unknown state" otherwise.
 		if pollStateIsIntl(request) {
 			return intlhandlePollLogin(request)
 		}
@@ -498,7 +496,6 @@ func buildRegistration() registrationPayload {
 			Logo:             pluginLogoURL,
 			ConfigFields: []pluginapi.ConfigField{
 				{Name: "checkin_auto", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Enable daily auto check-in at 09:00 local time (default true)."},
-				{Name: "login_variant", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{"cn", "solo", "intl"}, Description: "Variant for NEW logins: intl (Trae Intl, default), cn (Trae Code CN) or solo (Trae SOLO CN). The auth popup offers the same cn/intl choice per login (request region wins, this config is the fallback). Existing accounts keep the variant recorded at login/adoption time."},
 				{Name: "app_version", Type: pluginapi.ConfigFieldTypeString, Description: "Client version the INTL login flow presents (default 3.5.66). The www.trae.ai authorization page rejects stale version strings — set the version the intl client currently reports when logins bounce with a version-mismatch page."},
 				{Name: "callback_bind", Type: pluginapi.ConfigFieldTypeString, Description: "Bind address for the OAuth callback listener (default 127.0.0.1). Set 0.0.0.0 when CPA runs in Docker or on a remote host so the port can be published."},
 				{Name: "callback_port", Type: pluginapi.ConfigFieldTypeString, Description: "Fixed port for the OAuth callback listener (default: random per login). Docker: set e.g. 41890 with callback_bind=0.0.0.0 and publish -p 127.0.0.1:41890:41890 so the redirect completes automatically. If the browser runs on another machine and cannot reach the host's 127.0.0.1, or paste the failed address-bar URL into the paste box on <panel>/v0/resource/plugins/trae/panel (it replays it to the plugin's oauth_submit endpoint)."},
@@ -949,9 +946,9 @@ func handleParseAuth(request []byte) ([]byte, error) {
 //  6. Persist login state (state = login_trace_id) and start callback server.
 //  7. Return AuthLoginStartResponse{URL: verificationURI, State: loginTraceID}.
 func handleStartLogin(request []byte) ([]byte, error) {
-	// T24: request-carried region wins (default intl); sticky login_variant
-	// is the fallback only. Illegal values fail before any network I/O.
-	lv, err := resolveRequestLoginVariant(request, loadedLoginVariant())
+	// Request-carried region wins (default intl). Illegal values fail
+	// before any network I/O.
+	lv, err := resolveRequestLoginVariant(request)
 	if err != nil {
 		return nil, err
 	}
@@ -959,10 +956,9 @@ func handleStartLogin(request []byte) ([]byte, error) {
 }
 
 // startLoginWithVariant starts a CN/SOLO login flow pinned to lv. The host
-// RPC entry (handleStartLogin) passes the configured login_variant — the
+// RPC entry (handleStartLogin) passes the request-carried region — the
 // OAuth entry point stays single per plugin; which variant it targets is
-// chosen in the plugin config (login_variant dropdown) and is STICKY
-// (v0.12.10).
+// chosen per login attempt.
 func startLoginWithVariant(request []byte, lv string) ([]byte, error) {
 	// Step 0: host login context (AuthDir for auth-file persistence).
 	// The CPA-supplied BaseURL is NOT used for the callback any more: the
@@ -1098,7 +1094,7 @@ func startLoginWithVariant(request []byte, lv string) ([]byte, error) {
 		URL:       verificationURI,
 		State:     state,
 		ExpiresAt: time.Now().Add(loginTTL).UTC(),
-		Metadata: withLoginRegionMetadata(map[string]any{
+		Metadata: map[string]any{
 			"logo":                   pluginLogoURL,
 			"callback_url":           cbURL,
 			"login_trace_id":         loginTraceID,
@@ -1112,7 +1108,7 @@ func startLoginWithVariant(request []byte, lv string) ([]byte, error) {
 			// required"), so any UI introspecting this map should point
 			// users at oauth_submit instead.
 			"fallback_submit_path": resourceSubmitPath,
-		}, lv),
+		},
 	})
 }
 

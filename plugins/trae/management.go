@@ -99,7 +99,7 @@ func managementRegistration() managementRegistrationResponse {
 			{Method: http.MethodGet, Path: base + "/intl/status", Description: "Trae Intl: plugin status."},
 			{Method: http.MethodPost, Path: base + "/intl/import", Description: "Trae Intl: import credential JSON into host auth store."},
 			{Method: http.MethodGet, Path: base + "/models/groups", Description: "Per-variant model catalog (model_cache snapshots; ?refresh=1 re-discovers) for the panel's exclusion picker."},
-			{Method: http.MethodGet, Path: base + "/login/region", Description: "Auth-popup region selector: cn/intl options (default intl) plus the current sticky selection. Read-only, never writes config files."},
+			{Method: http.MethodPost, Path: base + "/login/start", Description: "Panel authorize-login: start an OAuth login for {region|variant: cn|intl} (default intl; anything else 400 with nothing started). Returns {auth_url, realm}."},
 		},
 		// Single menu entry (v0.12.2): /panel covers CN + SOLO + Intl
 		// accounts. Legacy /intl_panel path serves the same panel.
@@ -168,10 +168,62 @@ func handleManagement(raw []byte) ([]byte, error) {
 	case req.Method == http.MethodGet && path == base+"/models/groups":
 		status, payload := handleModelGroupsQuery(req)
 		return okEnvelope(mgmtJSONResponse(status, payload))
-	case req.Method == http.MethodGet && path == base+"/login/region":
-		return okEnvelope(mgmtJSONResponse(http.StatusOK, loginRegionSelectorPayload()))
+	case req.Method == http.MethodPost && path == base+"/login/start":
+		status, payload := handlePanelLoginStart(req)
+		return okEnvelope(mgmtJSONResponse(status, payload))
 	}
 	return okEnvelope(mgmtJSONResponse(http.StatusNotFound, map[string]any{"error": "not found: " + path}))
+}
+
+// handlePanelLoginStart serves POST <base>/login/start — the management
+// panel's authorize-login button. Body carries the realm the same way an
+// auth.login_start request does (region / login_region / login_variant /
+// variant: cn|intl); absent keys resolve to the intl default. Any other
+// non-empty value is a 400 and nothing is started. On success it returns
+// {auth_url, realm}: the panel opens auth_url in a new tab and polls for
+// the new credential file.
+func handlePanelLoginStart(req pluginapi.ManagementRequest) (int, any) {
+	realm, err := resolveRequestLoginVariant(req.Body)
+	if err != nil {
+		return http.StatusBadRequest, map[string]any{"error": err.Error()}
+	}
+	url, err := loginStartForRealm(req.Body, realm)
+	if err != nil {
+		return http.StatusInternalServerError, map[string]any{"error": err.Error()}
+	}
+	return http.StatusOK, map[string]any{"auth_url": url, "realm": realm}
+}
+
+// loginStartForRealm starts a login pinned to an explicit realm and
+// returns the browser-facing authorization URL. Package var so endpoint
+// tests can stub the networked start.
+var loginStartForRealm = func(request []byte, realm string) (string, error) {
+	var raw []byte
+	var err error
+	if realm == variantIntl {
+		raw, err = intlhandleStartLogin(request)
+	} else {
+		raw, err = startLoginWithVariant(request, realm)
+	}
+	if err != nil {
+		return "", err
+	}
+	var env envelope
+	if err := json.Unmarshal(raw, &env); err != nil || !env.OK {
+		msg := "login start failed"
+		if env.Error != nil && strings.TrimSpace(env.Error.Message) != "" {
+			msg = env.Error.Message
+		}
+		return "", fmt.Errorf("%s", msg)
+	}
+	var resp pluginapi.AuthLoginStartResponse
+	if err := json.Unmarshal(env.Result, &resp); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(resp.URL) == "" {
+		return "", fmt.Errorf("login start returned no auth url")
+	}
+	return resp.URL, nil
 }
 
 // -----------------------------------------------------------------------------

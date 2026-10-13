@@ -2,12 +2,11 @@
 // (v0.12.0). trae-cn, trae-solo-cn and trae-intl were separate plugins;
 // they are merged here. Each auth file carries its variant explicitly
 // (auth.variant), derived from the filename for legacy files by adopt.go.
-// NEW logins target the variant configured via login_variant.
+// NEW logins target the request-carried region (default intl).
 package main
 
 import (
 	"encoding/json"
-	"log"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,14 +16,6 @@ const (
 	variantCN   = "cn"
 	variantSolo = "solo"
 	variantIntl = "intl"
-)
-
-var (
-	loginVariantMu sync.RWMutex
-	// T24: NEW logins default to intl; login_variant config stays as the
-	// sticky fallback (explicit key still wins, bare reconfigures keep the
-	// current value — see configureVariant below).
-	loginVariant = variantIntl
 )
 
 // normalizeVariant maps any stored hint onto cn/solo/intl (default cn).
@@ -89,13 +80,6 @@ func variantLabel(variant string) string {
 	}
 }
 
-// loadedLoginVariant returns the configured variant for NEW logins.
-func loadedLoginVariant() string {
-	loginVariantMu.RLock()
-	defer loginVariantMu.RUnlock()
-	return loginVariant
-}
-
 // oauthAppVersion is the client version the INTL login flow presents
 // (GetLoginGuidance / device registration / IDEVersion). Configurable via
 // app_version (issue #24: the www.trae.ai authorization page rejects stale
@@ -156,7 +140,7 @@ func loadedCallbackPort() int {
 }
 
 // configureCallback parses callback_bind / callback_public_host from the
-// plugin config block (same YAML line format as login_variant).
+// plugin config block.
 func configureCallback(lines []string) {
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -193,35 +177,17 @@ func configureCallbackPort(lines []string) {
 	}
 }
 
-// configureVariant parses login_variant (and callback knobs) from the
-// plugin config block. STICKY semantics (v0.12.3): login_variant only
-// changes when the incoming config explicitly carries a login_variant
-// line — the host may resend Register/Reconfigure with a bare or foreign
-// config block (e.g. during auth-store churn), and resetting to the cn
-// default mid-flight broke INTL logins by rerouting their polls.
+// configureVariant parses non-realm plugin knobs (callback bind/host/port,
+// app_version) from the plugin config block. The login realm is never read
+// from config: auth.login_start carries it per attempt (default intl).
 func configureVariant(raw []byte) {
-	next := ""
 	if len(raw) > 0 {
 		var req struct {
 			ConfigYAML []byte `json:"config_yaml"`
 		}
 		if err := json.Unmarshal(raw, &req); err == nil {
 			lines := strings.Split(string(req.ConfigYAML), "\n")
-			for _, line := range lines {
-				line = strings.TrimSpace(line)
-				if strings.HasPrefix(line, "login_variant:") {
-					v := strings.Trim(strings.TrimSpace(strings.TrimPrefix(line, "login_variant:")), "\"'")
-					next = normalizeVariant(v)
-				}
-			}
-			// v0.12.68 (issue #24): the line-scan above silently misses
-			// flow-style one-liners ({enabled: true, login_variant: intl}) —
-			// the YAML decode sees them. Block style agrees in both paths;
-			// the map only adds visibility. The sticky rule is unchanged.
 			if m, ok := decodePluginConfigYAML(req.ConfigYAML); ok {
-				if v, present := m["login_variant"]; present {
-					next = normalizeVariant(configScalarString(v))
-				}
 				if v, present := m["app_version"]; present {
 					if av := strings.TrimSpace(configScalarString(v)); av != "" {
 						oauthAppVersionMu.Lock()
@@ -230,23 +196,11 @@ func configureVariant(raw []byte) {
 					}
 				}
 			}
-			if next != "" && loadedLoginVariant() != next {
-				log.Printf("trae: login_variant=%s applied (new logins target %s)", next, strings.ToUpper(next))
-			}
 			configureCallback(lines)
 			configureCallbackPort(lines)
 		}
 	}
-	// Canonical usage feed (plan T12): resolve usage_feed_enabled /
-	// usage_feed_path so handleUsageTrae's recordUsageFeed has a live path.
-	// Non-fatal by design: a failure only disables the feed, never chat.
 	configureUsageFeed(raw)
-	if next == "" {
-		return
-	}
-	loginVariantMu.Lock()
-	loginVariant = next
-	loginVariantMu.Unlock()
 }
 
 // sniffVariantFromJSON derives the variant of a legacy auth file: explicit
@@ -347,15 +301,9 @@ func extractAuthPayload(request []byte) ([]byte, bool) {
 	return nil, false
 }
 
-// loginVariantIsIntl reports whether NEW logins target the Intl realm.
-func loginVariantIsIntl() bool {
-	return loadedLoginVariant() == variantIntl
-}
-
 // pollStateIsIntl reports whether a login-poll request's state was created
 // by the Intl login flow (i.e. lives in intlloginStates). Routing polls by
-// state location instead of the mutable login_variant global keeps
-// in-flight logins immune to mid-flight variant flips (v0.12.3).
+// state location keeps in-flight logins immune to mid-flight flips.
 func pollStateIsIntl(request []byte) bool {
 	var req struct {
 		State string `json:"State"`
