@@ -15,11 +15,14 @@ echo "Target: $TARGET_OS/$TARGET_ARCH"
 echo "Plugins dir: $PLUGINS_DIR"
 echo ""
 
-# 插件清单（v0.12.0 收敛为 3 个统一插件）
+# 插件清单（5 平台插件 + token-usage-tracker 占位）
 PLUGINS=(
   "workbuddy"
   "qoder"
   "trae"
+  "zcode"
+  "mimo"
+  "token-usage-tracker"
 )
 
 # 输出目录
@@ -53,10 +56,19 @@ FAILED=0
 FAILED_LIST=()
 
 for plugin in "${PLUGINS[@]}"; do
+  if [ ! -d "$PLUGINS_DIR/$plugin" ]; then
+    echo "--- Skipping $plugin (directory not found) ---"
+    echo "  ⚠️  warning: $PLUGINS_DIR/$plugin does not exist, skipping"
+    echo ""
+    continue
+  fi
   echo "--- Building $plugin ---"
   cd "$PLUGINS_DIR/$plugin"
+  VER="$(tr -d '[:space:]' < VERSION 2>/dev/null || true)"
+  VFLAG=""
+  [ -n "$VER" ] && VFLAG="-X main.version=$VER"
   OUT_FILE="$OUT_DIR/${plugin}.${EXT}"
-  if CGO_ENABLED=1 go build -buildmode=c-shared -trimpath -ldflags="-s -w" -o "$OUT_FILE" . 2>&1 | tail -5; then
+  if CGO_ENABLED=1 go build -buildmode=c-shared -trimpath -ldflags="-s -w $VFLAG" -o "$OUT_FILE" . 2>&1 | tail -5; then
     if [ -f "$OUT_FILE" ]; then
       SIZE=$(du -h "$OUT_FILE" | cut -f1)
       echo "  ✅ $plugin → $OUT_FILE ($SIZE)"
