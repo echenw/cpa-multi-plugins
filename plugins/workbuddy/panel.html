@@ -50,7 +50,7 @@ h1{font-size:20px;margin:0 0 4px}.sub{color:var(--mut);font-size:13px;margin-bot
 button{background:var(--acc);color:var(--on-acc);border:0;border-radius:8px;padding:8px 14px;cursor:pointer;font-size:13px;white-space:nowrap}
 button.sec{background:var(--btn-sec);color:var(--fg)}button.sec:hover{background:var(--btn-sec-hover)}button:disabled{opacity:.5;cursor:default}
 .toggle{display:flex;gap:8px;align-items:center;color:var(--mut);font-size:13px}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px;margin-bottom:80px}
 .card,.summary{background:var(--card);border:1px solid var(--border);border-radius:12px}
 .card{padding:16px}
 .card.selected{border-color:var(--acc);box-shadow:0 0 0 2px var(--acc-ring)}
@@ -66,6 +66,8 @@ button.sec{background:var(--btn-sec);color:var(--fg)}button.sec:hover{background
 .ftag{background:var(--surface);border:1px solid var(--border);color:var(--mut);border-radius:99px;padding:5px 14px;font-size:12px;cursor:pointer;font-weight:600}
 .ftag.active{background:var(--acc);color:var(--on-acc);border-color:var(--acc)}
 .ftag .cnt{font-size:10px;opacity:.75;margin-left:4px}
+.lreg{background:var(--surface);border:1px solid var(--border);color:var(--mut);border-radius:99px;padding:5px 14px;font-size:12px;cursor:pointer;font-weight:600}
+.lreg.on{background:var(--acc);color:var(--on-acc);border-color:var(--acc)}
 /* 用量汇总与账号卡共用 --card，避免夜间两套底色 */
 .summary{padding:16px;margin-bottom:14px}
 .summary-hd{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
@@ -191,13 +193,17 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
   </div>
   <div class="bar">
     <button id="loginBtn" onclick="openLoginModal()">授权登录</button>
+    <span class="toggle" title="授权登录的目标渠道（默认 Intl）">
+      <button type="button" class="lreg" data-login-region="cn" onclick="pickLoginRegion('cn',this)">CN</button>
+      <button type="button" class="lreg on" data-login-region="intl" onclick="pickLoginRegion('intl',this)">Intl</button>
+    </span>
     <button class="sec" id="importBtn" onclick="openImportModal()">导入凭证</button>
     <button id="refreshBtn" onclick="load(true,this)">刷新数据</button>
     <button class="sec" onclick="checkinAll(this)">全部签到</button>
+    <button class="sec" onclick="modelCtlToggle(this)" title="按渠道勾选启用/禁用模型（写入 oauth-excluded-models 子键）">模型禁用</button>
     <button class="sec" onclick="tasksRunAll(this)" title="CN 任务中心：活跃上报 / 补签 / 接受任务 / 猫旅行 / 连登兑换 / 抽奖 / 领奖 / 开学季">全部任务</button>
     <button class="sec" onclick="vouchersAll(this)" title="开学季券码查询（仅 CN · 活动期）">开学季</button>
     <button class="sec" onclick="claimTrialAll(this)" title="仅 Global · 一次性">全部领取</button>
-    <button class="sec" onclick="modelCtlToggle(this)" title="按渠道勾选启用/禁用模型（写入 oauth-excluded-models 子键）">模型禁用</button>
     <label class="toggle" title="仅 CN 账号 09:00 / 21:00"><input type="checkbox" id="autoToggle" onchange="toggleAuto(this.checked)"> 自动签到(CN)</label>
     <span class="toggle" id="svtime"></span>
   </div>
@@ -248,24 +254,31 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
       <button type="button" class="modal-x" onclick="closeLoginModal()" aria-label="关闭">×</button>
     </div>
     <div class="modal-bd">
-      <p class="hint">按步骤完成授权：先打开授权链接完成上游登录，再把浏览器地址栏的回调地址粘贴回来提交；弹窗保持打开，登录成功自动关闭并刷新。默认 <code>Intl</code>，切换区域会重新开始。</p>
-      <div style="margin-bottom:12px"><label class="toggle" title="授权登录的目标区域（默认 Intl；切换会重新开始）"><input type="radio" name="loginModalRegion" value="intl" checked onchange="loginModalStart()"> Intl <input type="radio" name="loginModalRegion" value="cn" onchange="loginModalStart()"> CN</label></div>
-      <div style="font-weight:600;margin-bottom:6px">步骤 1 · 打开授权链接</div>
-      <div style="display:flex;gap:8px;margin-bottom:12px">
-        <input id="loginAuthUrl" class="field-input" readonly placeholder="正在获取授权链接…">
-        <button type="button" class="sec" onclick="copyLoginUrl()">复制</button>
-        <button type="button" onclick="openLoginUrl()">打开链接</button>
+      <p class="hint">按步骤完成授权：先打开授权链接完成上游登录，再把浏览器回调地址粘贴回来提交。默认 <code>Intl</code>，切换渠道会重新开始登录。</p>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+        <span class="toggle">渠道（默认 Intl，切换会重新开始登录）</span>
+        <button type="button" class="lreg" data-login-modal-region="cn" onclick="pickLoginModalRegion('cn',this)">CN</button>
+        <button type="button" class="lreg on" data-login-modal-region="intl" onclick="pickLoginModalRegion('intl',this)">Intl</button>
       </div>
-      <div style="font-weight:600;margin-bottom:6px">步骤 2 · 粘贴回调地址并提交</div>
+      <p class="hint" style="margin-bottom:6px">步骤 1：复制授权链接并在新标签页打开（弹窗保持打开）</p>
       <div style="display:flex;gap:8px;margin-bottom:12px">
-        <input id="loginCallbackUrl" class="field-input" placeholder="粘贴授权后浏览器地址栏的完整 URL">
-        <button type="button" onclick="submitLoginCallback(this)">提交</button>
+        <input id="loginAuthURL" type="text" readonly placeholder="正在获取授权链接…" style="flex:1;padding:8px 10px;font-family:ui-monospace,monospace;font-size:12px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--fg);"/>
       </div>
-      <div id="loginStatus" style="color:var(--mut);font-size:12px;min-height:18px"></div>
+      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+        <button type="button" class="sec" onclick="copyLoginURL(this)">复制链接</button>
+        <button type="button" onclick="openLoginURL()">打开链接</button>
+        <button type="button" class="sec" onclick="loginModalStart(this)" title="丢弃当前 state 并按当前渠道重新生成授权链接">重新开始</button>
+      </div>
+      <p class="hint" style="margin-bottom:6px">步骤 2：粘贴浏览器回调地址并提交</p>
+      <div style="display:flex;gap:8px;margin-bottom:12px">
+        <input id="loginCallbackURL" type="text" placeholder="粘贴授权后浏览器地址栏的完整 URL" autocomplete="off" style="flex:1;padding:8px 10px;font-family:ui-monospace,monospace;font-size:12px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--fg);"/>
+        <button type="button" onclick="submitLoginCallback(this)">提交回调 URL</button>
+      </div>
+      <p class="hint" id="loginStatus" style="margin:0">等待开始…</p>
+      <p class="hint" style="margin:8px 0 0;opacity:0.7">弹窗保持打开以便自动轮询（每 5 秒一次），直到成功（自动关闭并刷新账号）或过期（按提示重新开始）。</p>
     </div>
     <div class="modal-ft">
-      <button type="button" class="sec" id="loginModalRestart" onclick="loginModalStart(this)">重新开始</button>
-      <button type="button" class="sec" onclick="closeLoginModal()">取消</button>
+      <button type="button" class="sec" onclick="closeLoginModal()">关闭</button>
     </div>
   </div>
 </div>
@@ -1100,14 +1113,28 @@ async function importAuth(btn){
    弹窗内步骤 1 展示只读授权链接（复制/打开链接，新标签页打开且弹窗保持），
    步骤 2 粘贴回调地址 POST /login/callback；状态行每 ~5s POST /login/poll
    直到成功（关弹窗 + load(true)）或过期（重启提示）。区域切换重新开始。 */
+let loginRegion="intl";
 let loginModalState="", loginModalUrl="", loginModalTimer=null;
-function loginModalRegion(){
-  const el=document.querySelector('input[name="loginModalRegion"]:checked');
-  return el?el.value:"intl";
+function syncLoginRegionUI(){
+  document.querySelectorAll("[data-login-region]").forEach(b=>b.classList.toggle("on",b.dataset.loginRegion===loginRegion));
+  document.querySelectorAll("[data-login-modal-region]").forEach(b=>b.classList.toggle("on",b.dataset.loginModalRegion===loginRegion));
+}
+function pickLoginRegion(r,btn){
+  loginRegion=r;
+  syncLoginRegionUI();
+  if(btn)btn.blur();
+}
+function pickLoginModalRegion(r,btn){
+  if(r===loginRegion&&loginModalState){if(btn)btn.blur();return}
+  loginRegion=r;
+  syncLoginRegionUI();
+  if(btn)btn.blur();
+  if(document.getElementById("loginModal").classList.contains("show"))loginModalStart(null);
 }
 function openLoginModal(){
   document.getElementById("loginModal").classList.add("show");
-  loginModalStart();
+  syncLoginRegionUI();
+  loginModalStart(null);
 }
 function closeLoginModal(){
   document.getElementById("loginModal").classList.remove("show");
@@ -1132,32 +1159,33 @@ function scheduleLoginPoll(){
 async function loginModalStart(btn){
   stopLoginPoll();
   loginModalState=""; loginModalUrl="";
-  document.getElementById("loginAuthUrl").value="";
-  document.getElementById("loginCallbackUrl").value="";
+  document.getElementById("loginAuthURL").value="";
+  document.getElementById("loginCallbackURL").value="";
   setLoginStatus("正在获取授权链接…");
   busy(btn,true);
   try{
-    const d=await api("/login/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({region:loginModalRegion()})});
+    const d=await api("/login/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({region:loginRegion})});
     if(d.error){setLoginStatus("授权登录失败："+d.error,"err");toast("授权登录失败","err",d.error);return}
     if(!d.auth_url||!d.state){setLoginStatus("上游未返回授权链接，请点重新开始","err");return}
     loginModalState=d.state; loginModalUrl=d.auth_url;
-    document.getElementById("loginAuthUrl").value=d.auth_url;
+    document.getElementById("loginAuthURL").value=d.auth_url;
     setLoginStatus("已生成授权链接（"+(d.region||"intl")+"），按步骤 1 在新标签页完成授权");
     scheduleLoginPoll();
   }catch(e){setLoginStatus("授权登录请求失败："+(e.message||e),"err");toast("授权登录请求失败","err",e.message)}
   finally{busy(btn,false)}
 }
-function copyLoginUrl(){
-  const t=document.getElementById("loginAuthUrl").value||"";
+function copyLoginURL(btn){
+  const t=document.getElementById("loginAuthURL").value||"";
   if(!t){toast("还没有授权链接","warn");return}
   const done=()=>toast("已复制","ok",t.slice(0,80));
   if(navigator.clipboard&&navigator.clipboard.writeText){
     navigator.clipboard.writeText(t).then(done).catch(()=>fallbackCopy(t,done));
   }else fallbackCopy(t,done);
+  if(btn)btn.blur();
 }
-function openLoginUrl(){
+function openLoginURL(){
   if(!loginModalUrl){toast("还没有授权链接","warn");return}
-  window.open(loginModalUrl,"_blank");
+  window.open(loginModalUrl,"_blank","noopener");
   toast("已打开授权页","ok","在新标签页完成授权后回到本弹窗粘贴回调地址");
 }
 function handleLoginPollResult(d){
@@ -1186,7 +1214,7 @@ function handleLoginPollResult(d){
   if(d.error)setLoginStatus(d.error,"err");
 }
 async function submitLoginCallback(btn){
-  const cb=(document.getElementById("loginCallbackUrl").value||"").trim();
+  const cb=(document.getElementById("loginCallbackURL").value||"").trim();
   if(!loginModalState){toast("请先获取授权链接","warn");return}
   if(!cb){toast("请粘贴回调地址","warn");return}
   busy(btn,true);
