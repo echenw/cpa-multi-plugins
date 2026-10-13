@@ -139,14 +139,25 @@ func loginAccountBaseFor(region string) string {
 }
 
 func handleStartLogin(raw []byte) ([]byte, error) {
-	return startLoginWithRegion(raw, loadedLoginRegion())
+	// T24: request-carried region wins (default intl); sticky login_region
+	// is the fallback only. Illegal values fail before any network I/O.
+	region, err := resolveRequestLoginRegion(raw, loadedLoginRegion())
+	if err != nil {
+		return nil, err
+	}
+	return startLoginWithRegion(raw, region)
 }
 
 // startLoginWithRegion starts a login flow pinned to region. The host RPC
-// entry (handleStartLogin) passes the configured login_region — the OAuth
-// entry point stays single per plugin; which realm it targets is chosen in
-// the plugin config (login_region dropdown) and is STICKY (v0.12.10).
+// entry (handleStartLogin) prefers the request-carried region (T24, default
+// intl); the plugin config (login_region dropdown) is the fallback and stays
+// STICKY (v0.12.10).
 func startLoginWithRegion(raw []byte, region string) ([]byte, error) {
+	// T24: only cn/intl route; anything else is an explicit rejection (the
+	// stored selection is untouched — this path never writes config).
+	if region != regionCN && region != regionIntl {
+		return nil, fmt.Errorf("invalid login region %q: want \"cn\" or \"intl\" (default \"intl\"); current selection unchanged", region)
+	}
 	client := newLoginClient()
 	platform := currentLoginPlatform()
 	headers := authStateHeaders(region)
@@ -173,7 +184,7 @@ func startLoginWithRegion(raw []byte, region string) ([]byte, error) {
 		URL:       st.AuthURL,
 		State:     st.State,
 		ExpiresAt: time.Now().Add(loginTTL).UTC(),
-		Metadata:  map[string]any{"logo": pluginLogoURL},
+		Metadata:  withLoginRegionMetadata(map[string]any{"logo": pluginLogoURL}, region),
 	})
 }
 

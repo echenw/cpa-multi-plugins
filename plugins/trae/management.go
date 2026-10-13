@@ -99,6 +99,7 @@ func managementRegistration() managementRegistrationResponse {
 			{Method: http.MethodGet, Path: base + "/intl/status", Description: "Trae Intl: plugin status."},
 			{Method: http.MethodPost, Path: base + "/intl/import", Description: "Trae Intl: import credential JSON into host auth store."},
 			{Method: http.MethodGet, Path: base + "/models/groups", Description: "Per-variant model catalog (model_cache snapshots; ?refresh=1 re-discovers) for the panel's exclusion picker."},
+			{Method: http.MethodGet, Path: base + "/login/region", Description: "Auth-popup region selector: cn/intl options (default intl) plus the current sticky selection. Read-only, never writes config files."},
 		},
 		// Single menu entry (v0.12.2): /panel covers CN + SOLO + Intl
 		// accounts. Legacy /intl_panel path serves the same panel.
@@ -167,6 +168,8 @@ func handleManagement(raw []byte) ([]byte, error) {
 	case req.Method == http.MethodGet && path == base+"/models/groups":
 		status, payload := handleModelGroupsQuery(req)
 		return okEnvelope(mgmtJSONResponse(status, payload))
+	case req.Method == http.MethodGet && path == base+"/login/region":
+		return okEnvelope(mgmtJSONResponse(http.StatusOK, loginRegionSelectorPayload()))
 	}
 	return okEnvelope(mgmtJSONResponse(http.StatusNotFound, map[string]any{"error": "not found: " + path}))
 }

@@ -623,7 +623,7 @@ func intlhandleStartLogin(request []byte) ([]byte, error) {
 		URL:       verificationURI,
 		State:     loginTraceID,
 		ExpiresAt: time.Now().Add(loginTTL).UTC(),
-		Metadata:  map[string]any{"logo": pluginLogoURL, "callback_url": cbURL, "fallback_callback_path": resourceCallbackPath, "fallback_submit_path": resourceSubmitPath},
+		Metadata: withLoginRegionMetadata(map[string]any{"logo": pluginLogoURL, "callback_url": cbURL, "fallback_callback_path": resourceCallbackPath, "fallback_submit_path": resourceSubmitPath}, variantIntl),
 	})
 }
 

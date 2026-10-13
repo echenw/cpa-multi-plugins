@@ -4,7 +4,7 @@ import "testing"
 
 // TestSplitBuildPinWiring verifies the split-channel build injection chain
 // end-to-end: run once WITHOUT ldflags (unified flavor: pin empty, default
-// stays cn) and once WITH
+// stays intl per T24) and once WITH
 //
 //	go test -ldflags "-X main.pluginVariantPin=intl" -run TestSplitBuildPinWiring
 //
@@ -12,8 +12,8 @@ import "testing"
 func TestSplitBuildPinWiring(t *testing.T) {
 	switch pluginVariantPin {
 	case "":
-		if got := loadedLoginRegion(); got != regionCN {
-			t.Fatalf("unified flavor: login default = %q, want %q", got, regionCN)
+		if got := loadedLoginRegion(); got != regionIntl {
+			t.Fatalf("unified flavor: login default = %q, want %q", got, regionIntl)
 		}
 	case "cn", "intl":
 		if got := loadedLoginRegion(); got != pluginVariantPin {

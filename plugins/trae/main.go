@@ -369,10 +369,17 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 		return handleParseAuth(request)
 
 	case pluginabi.MethodAuthLoginStart:
-		if loginVariantIsIntl() {
+		// T24: route per request-carried region (default intl); the sticky
+		// login_variant config is the fallback only. Illegal values are
+		// rejected explicitly with the stored selection untouched.
+		lv, err := resolveRequestLoginVariant(request, loadedLoginVariant())
+		if err != nil {
+			return errorEnvelope("invalid_region", err.Error()), nil
+		}
+		if lv == variantIntl {
 			return intlhandleStartLogin(request)
 		}
-		return handleStartLogin(request)
+		return startLoginWithVariant(request, lv)
 
 	case pluginabi.MethodAuthLoginPoll:
 		// Route by where the state lives (v0.12.3) — the login_variant global
@@ -942,7 +949,13 @@ func handleParseAuth(request []byte) ([]byte, error) {
 //  6. Persist login state (state = login_trace_id) and start callback server.
 //  7. Return AuthLoginStartResponse{URL: verificationURI, State: loginTraceID}.
 func handleStartLogin(request []byte) ([]byte, error) {
-	return startLoginWithVariant(request, loadedLoginVariant())
+	// T24: request-carried region wins (default intl); sticky login_variant
+	// is the fallback only. Illegal values fail before any network I/O.
+	lv, err := resolveRequestLoginVariant(request, loadedLoginVariant())
+	if err != nil {
+		return nil, err
+	}
+	return startLoginWithVariant(request, lv)
 }
 
 // startLoginWithVariant starts a CN/SOLO login flow pinned to lv. The host
@@ -1085,7 +1098,7 @@ func startLoginWithVariant(request []byte, lv string) ([]byte, error) {
 		URL:       verificationURI,
 		State:     state,
 		ExpiresAt: time.Now().Add(loginTTL).UTC(),
-		Metadata: map[string]any{
+		Metadata: withLoginRegionMetadata(map[string]any{
 			"logo":                   pluginLogoURL,
 			"callback_url":           cbURL,
 			"login_trace_id":         loginTraceID,
@@ -1099,7 +1112,7 @@ func startLoginWithVariant(request []byte, lv string) ([]byte, error) {
 			// required"), so any UI introspecting this map should point
 			// users at oauth_submit instead.
 			"fallback_submit_path": resourceSubmitPath,
-		},
+		}, lv),
 	})
 }
 

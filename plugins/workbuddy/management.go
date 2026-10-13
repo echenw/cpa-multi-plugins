@@ -167,6 +167,7 @@ func managementRegistration() managementRegistrationResponse {
 			{Method: http.MethodPost, Path: base + "/keepalive", Description: "Manually refresh access tokens for all accounts (or one with auth_index)."},
 			{Method: http.MethodGet, Path: base + "/keepalive/status", Description: "Last keepalive run summary + config."},
 			{Method: http.MethodGet, Path: base + "/models/groups", Description: "Per-realm model catalog (model_cache snapshots; ?refresh=1 re-discovers) for the panel's exclusion picker."},
+			{Method: http.MethodGet, Path: base + "/login/region", Description: "Auth-popup region selector: cn/intl options (default intl) plus the current sticky selection. Read-only, never writes config files."},
 		},
 		Resources: []resourceRoute{
 			{Path: "/panel", Menu: "WorkBuddy", Description: "WorkBuddy dashboard: credits, check-in, plan, import."},
@@ -241,6 +242,8 @@ func handleManagement(raw []byte) ([]byte, error) {
 	case req.Method == http.MethodGet && path == base+"/models/groups":
 		status, payload := handleModelGroupsQuery(req)
 		return okEnvelope(mgmtJSONResponse(status, payload))
+	case req.Method == http.MethodGet && path == base+"/login/region":
+		return okEnvelope(mgmtJSONResponse(http.StatusOK, loginRegionSelectorPayload()))
 	}
 	return okEnvelope(mgmtJSONResponse(http.StatusNotFound, map[string]any{"error": "not found: " + path}))
 }

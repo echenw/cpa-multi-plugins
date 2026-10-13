@@ -298,14 +298,19 @@ func makePKCE() (string, string) {
 // handleStartLogin implements AuthProvider.StartLogin: build the device
 // authorization URL and stash the PKCE verifier under the returned state.
 func handleStartLogin(raw []byte) ([]byte, error) {
-	return startLoginWithRegion(raw, loadedLoginRegion())
+	// T24: request-carried region wins (default intl); sticky login_region
+	// is the fallback only. Illegal values fail before any state is stored.
+	region, err := resolveRequestLoginRegion(raw, loadedLoginRegion())
+	if err != nil {
+		return nil, err
+	}
+	return startLoginWithRegion(raw, region)
 }
 
 // startLoginWithRegion starts a device-flow login pinned to region. The host
-// RPC entry (handleStartLogin) passes the configured login_region — the
-// OAuth entry point stays single per plugin; which realm it targets is
-// chosen in the plugin config (login_region dropdown) and is STICKY
-// (v0.12.10).
+// RPC entry (handleStartLogin) prefers the request-carried region (T24,
+// default intl); the plugin config (login_region dropdown) is the fallback
+// and stays STICKY (v0.12.10).
 //
 // v0.8.45 (official desktop client v0.4.3 asar forensics): both CN and Intl
 // now build the official desktop-client URL byte-for-byte (asar functions
@@ -324,6 +329,11 @@ func handleStartLogin(raw []byte) ([]byte, error) {
 // both "cockpit" and "desktop" values produce the same desktop URL. The
 // config key is kept for backward compatibility with existing deployments.
 func startLoginWithRegion(raw []byte, region string) ([]byte, error) {
+	// T24: only cn/intl route; anything else is an explicit rejection (the
+	// stored selection is untouched — this path never writes config).
+	if region != regionCN && region != regionIntl {
+		return nil, fmt.Errorf("invalid login region %q: want \"cn\" or \"intl\" (default \"intl\"); current selection unchanged", region)
+	}
 	verifier, challenge := makePKCE()
 	// nonce: intl protocol (cockpit-tools v1.3.36, aligned 2026-09-02)
 	// uses 32-hex uuid-simple; CN (cpa-plugin qoderwork reference) keeps
@@ -372,10 +382,10 @@ func startLoginWithRegion(raw []byte, region string) ([]byte, error) {
 		URL:       authURL,
 		State:     state,
 		ExpiresAt: now.Add(loginTTL).UTC(),
-		Metadata: map[string]any{
+		Metadata: withLoginRegionMetadata(map[string]any{
 			"logo":   pluginLogoURL,
 			"prompt": prompt,
-		},
+		}, region),
 	})
 }
 

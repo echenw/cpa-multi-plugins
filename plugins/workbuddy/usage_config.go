@@ -36,10 +36,12 @@ var (
 	loginPlatform   = "CLI"
 	loginPlatformMu sync.RWMutex
 
-	// loginRegion selects the upstream realm for NEW logins: "cn"
-	// (copilot.tencent.com, default) or "intl" (codebuddy.ai, IDE client;
-	// merged codebuddy-intl plugin v0.11.0).
-	loginRegion   = regionCN
+	// loginRegion selects the upstream realm for NEW logins: "intl"
+	// (codebuddy.ai, IDE client; T24 default) or "cn" (copilot.tencent.com).
+	// Merged codebuddy-intl plugin v0.11.0. The login_region config stays as
+	// the sticky fallback (explicit key still wins, bare reconfigures keep
+	// the current value — see configure below).
+	loginRegion   = regionIntl
 	loginRegionMu sync.RWMutex
 
 	// usageReportURL / usageReportKey: POST NDJSON to CPA-Manager-Plus

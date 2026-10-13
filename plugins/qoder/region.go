@@ -22,7 +22,10 @@ const (
 
 var (
 	loginRegionMu sync.RWMutex
-	loginRegion   = regionCN // region for NEW logins (config login_region)
+	// T24: NEW logins default to intl; the login_region config stays as the
+	// sticky fallback (explicit key still wins, bare reconfigures keep the
+	// current value — see configure in usage_config.go).
+	loginRegion   = regionIntl // region for NEW logins (config login_region)
 
 	// v0.8.45 (deprecated): login_dialect was a v0.8.40 Intl-only opt-in
 	// that selected between "cockpit" (legacy no-client_id/machine_id entry)

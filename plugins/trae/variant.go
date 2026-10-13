@@ -21,7 +21,10 @@ const (
 
 var (
 	loginVariantMu sync.RWMutex
-	loginVariant   = variantCN
+	// T24: NEW logins default to intl; login_variant config stays as the
+	// sticky fallback (explicit key still wins, bare reconfigures keep the
+	// current value — see configureVariant below).
+	loginVariant = variantIntl
 )
 
 // normalizeVariant maps any stored hint onto cn/solo/intl (default cn).
