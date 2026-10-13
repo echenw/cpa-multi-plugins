@@ -50,6 +50,25 @@ func handleUsage(raw []byte) ([]byte, error) {
 	// the host's usage pump must never block on note-write RPCs.
 	usageLedgerObserve(record.AuthIndex, record.AuthID, detail.TotalTokens, record.Failed, started)
 	go usageNoteRefreshSoon(record.AuthIndex, record.AuthID)
+	// Canonical usage feed (plan T11, copied from T10): one NDJSON line per
+	// completed request for the standalone token-usage-tracker plugin.
+	// Synchronous — appendUsageFeedLine opens with O_APPEND per line and
+	// never touches the network. Known gaps on this path: no
+	// qoder-internal account nickname (pass record.Source through) and no
+	// scheduler session key (always ""); see usage_feed.go.
+	alias := strings.TrimSpace(record.Alias)
+	model := strings.TrimSpace(record.Model)
+	if model == "" {
+		model = alias
+	}
+	if alias == "" {
+		alias = model
+	}
+	var ttftNS uint64
+	if record.TTFT > 0 {
+		ttftNS = uint64(record.TTFT)
+	}
+	recordUsageFeed(alias, model, record.AuthID, started, normalizeUsageDetail(detail), record.Failed, record.Failure.StatusCode, record.ReasoningEffort, ttftNS, record.Source, "")
 	forwardUsageToCPAMP(
 		record.Alias,
 		record.Model,
