@@ -103,6 +103,19 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
 .mg-item input{accent-color:var(--acc)}
 .mg-item.mg-locked{opacity:.6;cursor:default}
 .mg-note{color:var(--warn);font-size:12px;margin-top:6px}
+/* 授权登录弹窗（in-panel OAuth modal）：标题 + 说明 + CN/Intl 切换（默认 Intl，
+   切换即重新开始登录）+ 步骤 1 只读授权链接（复制/新标签页打开，弹窗保持开启）
+   + 步骤 2 回调地址粘贴提交 + 状态行（约 5s 轮询至成功/过期）。 */
+.modal-scrim{position:fixed;inset:0;background:var(--scrim);display:flex;align-items:center;justify-content:center;z-index:10000;padding:16px}
+.modal-box{background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);max-width:640px;width:100%;max-height:92vh;overflow-y:auto;padding:20px;box-shadow:var(--toast-shadow)}
+.modal-hd{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}
+.modal-hd b{font-size:16px}
+.modal-intro{color:var(--mut);font-size:13px;margin-bottom:4px}
+.modal-step{margin:12px 0}
+.step-t{font-weight:700;font-size:13px;margin-bottom:6px}
+.modal-status{margin-top:12px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;color:var(--mut);font-size:12px;line-height:1.5;word-break:break-all;max-height:9em;overflow-y:auto}
+.modal-status.ok{color:var(--ok);border-color:var(--ok-border);background:var(--ok-soft)}
+.modal-status.err{color:var(--err);border-color:var(--err-border);background:var(--err-soft)}
 </style>
 <script>
 /* Early theme sync (before body paint): mirror CPA parent data-theme when
@@ -175,10 +188,8 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
       <button onclick="submitCallbackURL(this)">完成登录</button>
     </div>
     <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
-      <button onclick="panelLoginStart(this)">授权登录</button>
-      <label class="toggle"><input type="radio" name="loginRealm" value="intl" checked> Intl</label>
-      <label class="toggle"><input type="radio" name="loginRealm" value="cn"> CN</label>
-      <span class="toggle">默认 Intl；新账号登录后本页自动刷新</span>
+      <button onclick="panelLoginOpen()">授权登录</button>
+      <span class="toggle">弹窗内完成授权：打开链接 → 在新标签页登录 → 粘贴回调地址；登录后本页自动刷新</span>
     </div>
   </div>
   <div class="summary card" id="summaryBox" style="display:none"></div>
@@ -199,6 +210,33 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
   <div id="grid" class="grid"><div class="loading">加载中…</div></div>
 </div>
 <div class="toasts" id="toasts"></div>
+<div id="loginModalScrim" class="modal-scrim" style="display:none">
+  <div class="modal-box">
+    <div class="modal-hd"><b>Trae 授权登录</b><button class="sec" onclick="panelLoginClose()">关闭</button></div>
+    <div class="modal-intro">在弹窗内完成授权，无需离开本页：先打开授权链接完成浏览器登录，再把授权后地址栏的回调链接粘贴回来提交。切换 CN / Intl 会重新开始本次登录（默认 Intl）。</div>
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <label class="toggle"><input type="radio" name="loginRealm" value="intl" checked onchange="panelLoginRestart()"> Intl</label>
+      <label class="toggle"><input type="radio" name="loginRealm" value="cn" onchange="panelLoginRestart()"> CN</label>
+      <span class="toggle">默认 Intl；切换即重新开始登录</span>
+    </div>
+    <div class="modal-step">
+      <div class="step-t">步骤 1 · 打开授权链接（弹窗保持开启）</div>
+      <div style="display:flex;gap:8px">
+        <input id="loginAuthUrl" type="text" readonly placeholder="正在生成授权链接…" class="field-input" style="flex:1">
+        <button class="sec" onclick="panelLoginCopy(this)">复制链接</button>
+        <button onclick="panelLoginOpenLink()">打开链接</button>
+      </div>
+    </div>
+    <div class="modal-step">
+      <div class="step-t">步骤 2 · 粘贴授权后的回调地址并提交</div>
+      <div style="display:flex;gap:8px">
+        <input id="loginCallbackUrl" type="text" placeholder="http://127.0.0.1:&lt;port&gt;/authorize?isRedirect=true&authCodeInfo=…" class="field-input" style="flex:1">
+        <button onclick="panelLoginSubmitCallback(this)">提交回调</button>
+      </div>
+    </div>
+    <div id="loginModalStatus" class="modal-status">等待开始…</div>
+  </div>
+</div>
 <script>
 /* providerName: derived from URL (/v0/resource/plugins/<provider>/panel) so the
    same compiled panel.html works for trae-cn and trae-solo-cn. */
@@ -706,34 +744,127 @@ function panelLoginRealm(){
   const el=document.querySelector('input[name="loginRealm"]:checked');
   return (el&&el.value==="cn")?"cn":"intl";
 }
-async function panelLoginStart(btn){
-  const known=new Set((lastAccounts||[]).map(a=>a.auth_index).filter(Boolean));
-  busy(btn,true);
+/* ===== 授权登录弹窗（in-panel OAuth modal）=====
+   panelLoginOpen → POST /login/start {region} 取 {auth_url, state} →
+   步骤 1 展示只读链接（复制 / 新标签页打开，弹窗保持开启）→
+   状态行约 5s 轮询 POST /login/poll {state} → 成功（关窗 + 刷新）/
+   过期或失败（停轮询并提示重新开始）。步骤 2 把授权后地址栏回调链接
+   POST /login/callback {state, callback_url}，随后同样走轮询。
+   切换 CN/Intl 即重新开始本次登录。沿用 api()/toast()/busy() 既有模式。 */
+let loginModalState="",loginModalTimer=null;
+function panelLoginStatus(text, kind){
+  const el=document.getElementById("loginModalStatus");
+  if(!el)return;
+  el.textContent=text;
+  el.className="modal-status"+(kind==="ok"?" ok":kind==="err"?" err":"");
+}
+function panelLoginStopPoll(){
+  if(loginModalTimer){clearInterval(loginModalTimer);loginModalTimer=null}
+}
+function panelLoginOpen(){
+  document.getElementById("loginModalScrim").style.display="flex";
+  document.getElementById("loginAuthUrl").value="";
+  document.getElementById("loginCallbackUrl").value="";
+  loginModalState="";
+  panelLoginStart();
+}
+function panelLoginClose(){
+  panelLoginStopPoll();
+  loginModalState="";
+  document.getElementById("loginModalScrim").style.display="none";
+}
+function panelLoginRestart(){
+  if(document.getElementById("loginModalScrim").style.display==="none")return;
+  panelLoginStart();
+}
+async function panelLoginStart(){
+  panelLoginStopPoll();
+  loginModalState="";
+  document.getElementById("loginAuthUrl").value="";
+  panelLoginStatus("正在生成授权链接…");
   try{
     const d=await api("/login/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({region:panelLoginRealm()})});
     if(d.error) throw new Error(d.error);
-    if(!d.auth_url) throw new Error("登录未返回授权链接");
-    window.open(d.auth_url,"_blank");
-    toast("已打开授权页","ok","realm="+(d.realm||"")+" · 完成浏览器授权后本页会自动刷新");
-    panelLoginPoll(known,Date.now());
-  }catch(e){toast("发起登录失败","err",e.message||String(e))}
-  busy(btn,false);
-}
-async function panelLoginPoll(known, t0){
-  for(let i=0;i<220;i++){
-    await new Promise(r=>setTimeout(r,4000));
-    try{
-      const d=await api("/accounts");
-      let intl=[]; try{intl=(await api("/intl/accounts")).accounts||[]}catch(_){}
-      const all=[...((d&&d.accounts)||[]),...intl];
-      if(all.some(a=>a.auth_index&&!known.has(a.auth_index))){
-        await load(false);
-        toast("登录完成","ok","新账号已同步");
-        return;
-      }
-    }catch(_){/* keep polling */}
-    if(Date.now()-t0>15*60*1000){toast("登录等待超时","warn","15 分钟未检测到新账号，可手动点刷新数据");return}
+    if(!d.auth_url||!d.state) throw new Error("登录未返回授权链接");
+    loginModalState=d.state;
+    document.getElementById("loginAuthUrl").value=d.auth_url;
+    panelLoginStatus("已生成授权链接（realm="+(d.realm||"")+")：点「打开链接」在新标签页完成授权，再把地址栏回调链接粘贴到步骤 2 提交；或等待自动完成。");
+    panelLoginTimer();
+  }catch(e){
+    panelLoginStatus("发起登录失败："+(e.message||String(e)),"err");
+    toast("发起登录失败","err",e.message||String(e));
   }
+}
+function panelLoginTimer(){
+  panelLoginStopPoll();
+  loginModalTimer=setInterval(panelLoginPollOnce,5000);
+}
+async function panelLoginPollOnce(){
+  if(!loginModalState)return;
+  let d;
+  try{
+    d=await api("/login/poll",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({state:loginModalState})});
+  }catch(e){
+    panelLoginStatus("状态查询失败："+(e.message||String(e))+"（稍后自动重试）");
+    return;
+  }
+  panelLoginHandleStatus(d);
+}
+function panelLoginHandleStatus(d){
+  if(!d){panelLoginStatus("状态查询返回为空（稍后自动重试）");return}
+  if(d.status==="success"){
+    panelLoginStatus("登录完成："+(d.message||"新账号已保存"),"ok");
+    panelLoginStopPoll();
+    toast("登录完成","ok",d.message||"新账号已同步");
+    setTimeout(async()=>{panelLoginClose();await load(false)},800);
+    return;
+  }
+  if(d.status==="expired"){
+    panelLoginStatus("登录已过期："+(d.error||"登录状态不存在或已过期")+" —— 请切换一次 CN/Intl 或关闭重开以重新开始登录。","err");
+    panelLoginStopPoll();
+    return;
+  }
+  if(d.status==="error"){
+    panelLoginStatus("登录失败："+(d.error||"未知错误")+" —— 请重新开始登录。","err");
+    panelLoginStopPoll();
+    return;
+  }
+  panelLoginStatus("等待浏览器授权…"+(d.message?("（"+d.message+"）"):"")+"完成授权后可把地址栏回调链接粘贴到步骤 2 加速完成。");
+}
+function panelLoginCopy(btn){
+  const el=document.getElementById("loginAuthUrl");
+  const u=(el&&el.value||"").trim();
+  if(!u){toast("授权链接尚未生成","warn");return}
+  const done=()=>toast("已复制授权链接","ok");
+  try{
+    if(navigator.clipboard&&navigator.clipboard.writeText){
+      navigator.clipboard.writeText(u).then(done,()=>{el.select();document.execCommand("copy");done()});
+    }else{el.select();document.execCommand("copy");done()}
+  }catch(e){toast("复制失败","err",e.message||String(e))}
+  if(btn)btn.blur();
+}
+function panelLoginOpenLink(){
+  const u=(document.getElementById("loginAuthUrl").value||"").trim();
+  if(!u){toast("授权链接尚未生成","warn");return}
+  window.open(u,"_blank");
+}
+async function panelLoginSubmitCallback(btn){
+  const raw=(document.getElementById("loginCallbackUrl").value||"").trim();
+  if(!raw){toast("请先粘贴完整回调链接","warn");return}
+  if(!loginModalState){toast("登录尚未开始","warn","请先等待授权链接生成");return}
+  busy(btn,true);
+  try{
+    const d=await api("/login/callback",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({state:loginModalState,callback_url:raw})});
+    if(d.state)loginModalState=d.state;
+    panelLoginHandleStatus(d);
+    if(d.status==="success"||d.status==="expired"||d.status==="error"){
+      document.getElementById("loginCallbackUrl").value="";
+    }
+  }catch(e){
+    panelLoginStatus("提交失败："+(e.message||String(e)),"err");
+    toast("提交失败","err",e.message);
+  }
+  busy(btn,false);
 }
 async function load(force, btn){
   const g=document.getElementById("grid");

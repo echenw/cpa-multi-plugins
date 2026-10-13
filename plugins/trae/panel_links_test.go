@@ -34,7 +34,11 @@ func TestIntlPanelSwitchLinkIsAbsolute(t *testing.T) {
 }
 
 // Panel authorize-login: the live unified panel carries the 授权登录 button
-// + CN/Intl toggle (default Intl) wired to POST /login/start. The legacy
+// wired to an in-panel OAuth modal (NOT a bare new-tab jump): title + intro,
+// CN/Intl toggle (default Intl, switching restarts the login), step 1
+// readonly auth URL (copy + open-in-new-tab, modal stays open), step 2
+// callback-URL input + submit, and a status line polling POST /login/poll
+// (~5s) until success (close + reload) or expiry (restart hint). The legacy
 // intl_panel.html (split-binary trae-intl deployments only) stays untouched.
 func TestPanelAuthorizeLoginUI(t *testing.T) {
 	html := string(panelHTML)
@@ -50,7 +54,24 @@ func TestPanelAuthorizeLoginUI(t *testing.T) {
 	if !strings.Contains(html, "/login/start") {
 		t.Errorf("panel JS must call POST /login/start")
 	}
+	if !strings.Contains(html, `id="loginModalScrim"`) {
+		t.Errorf("unified panel must carry the in-panel OAuth modal")
+	}
+	if !strings.Contains(html, "/login/poll") {
+		t.Errorf("modal JS must poll POST /login/poll for completion")
+	}
+	if !strings.Contains(html, "/login/callback") {
+		t.Errorf("modal JS must submit the callback URL to POST /login/callback")
+	}
+	for _, want := range []string{"loginAuthUrl", "loginCallbackUrl", "loginModalStatus", "复制链接", "打开链接", "提交回调"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("modal must carry %q (auth-URL + copy + open-link, callback input + submit, status line)", want)
+		}
+	}
 	if strings.Contains(string(intlpanelHTML), "授权登录") {
 		t.Errorf("legacy intl panel must stay untouched (no authorize-login button)")
+	}
+	if strings.Contains(string(intlpanelHTML), "loginModalScrim") {
+		t.Errorf("legacy intl panel must stay untouched (no OAuth modal)")
 	}
 }

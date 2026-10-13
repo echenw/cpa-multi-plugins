@@ -99,7 +99,9 @@ func managementRegistration() managementRegistrationResponse {
 			{Method: http.MethodGet, Path: base + "/intl/status", Description: "Trae Intl: plugin status."},
 			{Method: http.MethodPost, Path: base + "/intl/import", Description: "Trae Intl: import credential JSON into host auth store."},
 			{Method: http.MethodGet, Path: base + "/models/groups", Description: "Per-variant model catalog (model_cache snapshots; ?refresh=1 re-discovers) for the panel's exclusion picker."},
-			{Method: http.MethodPost, Path: base + "/login/start", Description: "Panel authorize-login: start an OAuth login for {region|variant: cn|intl} (default intl; anything else 400 with nothing started). Returns {auth_url, realm}."},
+			{Method: http.MethodPost, Path: base + "/login/start", Description: "Panel authorize-login: start an OAuth login for {region|variant: cn|intl} (default intl; anything else 400 with nothing started). Returns {auth_url, realm, state, expires_at} for the in-panel OAuth modal."},
+		{Method: http.MethodPost, Path: base + "/login/poll", Description: "Panel OAuth modal: poll an in-panel login by {state} → {status: pending|success|expired|error}. Success persists the credential via host.auth.save."},
+		{Method: http.MethodPost, Path: base + "/login/callback", Description: "Panel OAuth modal: submit the browser address-bar callback URL {state, callback_url} (same shapes oauth_submit accepts), then one immediate poll attempt."},
 		},
 		// Single menu entry (v0.12.2): /panel covers CN + SOLO + Intl
 		// accounts. Legacy /intl_panel path serves the same panel.
@@ -171,6 +173,12 @@ func handleManagement(raw []byte) ([]byte, error) {
 	case req.Method == http.MethodPost && path == base+"/login/start":
 		status, payload := handlePanelLoginStart(req)
 		return okEnvelope(mgmtJSONResponse(status, payload))
+	case req.Method == http.MethodPost && path == base+"/login/poll":
+		status, payload := handlePanelLoginPoll(req)
+		return okEnvelope(mgmtJSONResponse(status, payload))
+	case req.Method == http.MethodPost && path == base+"/login/callback":
+		status, payload := handlePanelLoginCallback(req)
+		return okEnvelope(mgmtJSONResponse(status, payload))
 	}
 	return okEnvelope(mgmtJSONResponse(http.StatusNotFound, map[string]any{"error": "not found: " + path}))
 }
@@ -180,24 +188,25 @@ func handleManagement(raw []byte) ([]byte, error) {
 // auth.login_start request does (region / login_region / login_variant /
 // variant: cn|intl); absent keys resolve to the intl default. Any other
 // non-empty value is a 400 and nothing is started. On success it returns
-// {auth_url, realm}: the panel opens auth_url in a new tab and polls for
-// the new credential file.
+// {auth_url, realm, state, expires_at}: the in-panel OAuth modal shows
+// auth_url (copy + open-in-new-tab, modal stays open) and polls
+// POST <base>/login/poll with state until the login completes.
 func handlePanelLoginStart(req pluginapi.ManagementRequest) (int, any) {
 	realm, err := resolveRequestLoginVariant(req.Body)
 	if err != nil {
 		return http.StatusBadRequest, map[string]any{"error": err.Error()}
 	}
-	url, err := loginStartForRealm(req.Body, realm)
+	res, err := loginStartForRealm(req.Body, realm)
 	if err != nil {
 		return http.StatusInternalServerError, map[string]any{"error": err.Error()}
 	}
-	return http.StatusOK, map[string]any{"auth_url": url, "realm": realm}
+	return http.StatusOK, map[string]any{"auth_url": res.URL, "realm": realm, "state": res.State, "expires_at": res.ExpiresAt.UTC()}
 }
 
 // loginStartForRealm starts a login pinned to an explicit realm and
-// returns the browser-facing authorization URL. Package var so endpoint
-// tests can stub the networked start.
-var loginStartForRealm = func(request []byte, realm string) (string, error) {
+// returns the browser-facing authorization URL plus the poll state and its
+// expiry. Package var so endpoint tests can stub the networked start.
+var loginStartForRealm = func(request []byte, realm string) (panelLoginStartResult, error) {
 	var raw []byte
 	var err error
 	if realm == variantIntl {
@@ -206,7 +215,7 @@ var loginStartForRealm = func(request []byte, realm string) (string, error) {
 		raw, err = startLoginWithVariant(request, realm)
 	}
 	if err != nil {
-		return "", err
+		return panelLoginStartResult{}, err
 	}
 	var env envelope
 	if err := json.Unmarshal(raw, &env); err != nil || !env.OK {
@@ -214,16 +223,19 @@ var loginStartForRealm = func(request []byte, realm string) (string, error) {
 		if env.Error != nil && strings.TrimSpace(env.Error.Message) != "" {
 			msg = env.Error.Message
 		}
-		return "", fmt.Errorf("%s", msg)
+		return panelLoginStartResult{}, fmt.Errorf("%s", msg)
 	}
 	var resp pluginapi.AuthLoginStartResponse
 	if err := json.Unmarshal(env.Result, &resp); err != nil {
-		return "", err
+		return panelLoginStartResult{}, err
 	}
 	if strings.TrimSpace(resp.URL) == "" {
-		return "", fmt.Errorf("login start returned no auth url")
+		return panelLoginStartResult{}, fmt.Errorf("login start returned no auth url")
 	}
-	return resp.URL, nil
+	if strings.TrimSpace(resp.State) == "" {
+		return panelLoginStartResult{}, fmt.Errorf("login start returned no state")
+	}
+	return panelLoginStartResult{URL: resp.URL, State: resp.State, ExpiresAt: resp.ExpiresAt}, nil
 }
 
 // -----------------------------------------------------------------------------

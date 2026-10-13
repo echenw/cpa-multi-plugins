@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
@@ -127,10 +128,14 @@ func stubLoginStart(t *testing.T) (called *bool, gotRealm *string) {
 	orig := loginStartForRealm
 	called = new(bool)
 	gotRealm = new(string)
-	loginStartForRealm = func(_ []byte, realm string) (string, error) {
+	loginStartForRealm = func(_ []byte, realm string) (panelLoginStartResult, error) {
 		*called = true
 		*gotRealm = realm
-		return "https://auth.example/start?realm=" + realm, nil
+		return panelLoginStartResult{
+			URL:       "https://auth.example/start?realm=" + realm,
+			State:     "stub-state-" + realm,
+			ExpiresAt: time.Now().Add(loginTTL).UTC(),
+		}, nil
 	}
 	t.Cleanup(func() { loginStartForRealm = orig })
 	return called, gotRealm
@@ -152,6 +157,12 @@ func TestPanelLoginStartDefaultsIntl(t *testing.T) {
 		}
 		if payload["auth_url"] != "https://auth.example/start?realm=intl" {
 			t.Fatalf("body %q: auth_url=%v", body, payload["auth_url"])
+		}
+		if payload["state"] != "stub-state-intl" {
+			t.Fatalf("body %q: state=%v, want the poll key for the modal", body, payload["state"])
+		}
+		if _, ok := payload["expires_at"]; !ok {
+			t.Fatalf("body %q: payload=%v, want expires_at for the modal", body, payload)
 		}
 		if got := countInflightLogins(); got != before {
 			t.Fatalf("body %q: stubbed start leaked %d login state(s)", body, got-before)
