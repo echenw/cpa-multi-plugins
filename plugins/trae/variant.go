@@ -234,6 +234,10 @@ func configureVariant(raw []byte) {
 			configureCallbackPort(lines)
 		}
 	}
+	// Canonical usage feed (plan T12): resolve usage_feed_enabled /
+	// usage_feed_path so handleUsageTrae's recordUsageFeed has a live path.
+	// Non-fatal by design: a failure only disables the feed, never chat.
+	configureUsageFeed(raw)
 	if next == "" {
 		return
 	}

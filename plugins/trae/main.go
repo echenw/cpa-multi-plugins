@@ -84,6 +84,7 @@ import (
 	"github.com/mmqz/cpa-multi-plugins/plugins/trae/pool"
 	"github.com/mmqz/cpa-multi-plugins/plugins/trae/scheduler"
 	"github.com/mmqz/cpa-multi-plugins/plugins/trae/upstream"
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
@@ -690,6 +691,41 @@ func handleUsageTrae(raw []byte) ([]byte, error) {
 	tokens := record.Detail.TotalTokens
 	usageLedgerObserve(record.AuthIndex, record.AuthID, tokens, record.Failed, started)
 	go usageNoteRefreshSoon(record.AuthIndex, record.AuthID)
+	// Canonical usage feed (plan T12, copied from plugins/workbuddy T10):
+	// one NDJSON line per completed request for the standalone
+	// token-usage-tracker plugin. Synchronous — appendUsageFeedLine opens
+	// with O_APPEND per line and never touches the network. This host
+	// callback is the ONLY write entry (trae has no executor-side
+	// publishUsage). Known gaps on this path: no trae-internal account
+	// nickname (pass record.Source through) and no scheduler session key
+	// (always ""); see usage_feed.go.
+	alias := strings.TrimSpace(record.Alias)
+	model := strings.TrimSpace(record.Model)
+	if model == "" {
+		model = alias
+	}
+	if alias == "" {
+		alias = model
+	}
+	var ttftNS uint64
+	if record.TTFT > 0 {
+		ttftNS = uint64(record.TTFT)
+	}
+	detail := usage.Detail{
+		InputTokens:         record.Detail.InputTokens,
+		OutputTokens:        record.Detail.OutputTokens,
+		ReasoningTokens:     record.Detail.ReasoningTokens,
+		CachedTokens:        record.Detail.CachedTokens,
+		CacheReadTokens:     record.Detail.CacheReadTokens,
+		CacheCreationTokens: record.Detail.CacheCreationTokens,
+		TotalTokens:         record.Detail.TotalTokens,
+	}
+	if detail.TotalTokens == 0 {
+		if total := detail.InputTokens + detail.OutputTokens + detail.ReasoningTokens; total > 0 {
+			detail.TotalTokens = total
+		}
+	}
+	recordUsageFeed(alias, model, record.AuthID, started, detail, record.Failed, record.Failure.StatusCode, record.ReasoningEffort, ttftNS, record.Source, "")
 	return okEnvelope(map[string]any{"observed": true})
 }
 
