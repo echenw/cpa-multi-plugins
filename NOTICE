@@ -1,0 +1,55 @@
+NOTICE: cpa-plugin-suite attributions
+
+This work copy is derived from mmqz/cpa-multi-plugins (MIT),
+baseline 208a4194e41cf4e6a3a92529fda8f3517df5ae44.
+Upstream copyright lines are preserved in LICENSE and in the
+per-plugin files that carry them. This NOTICE adds attribution
+only and changes no license conclusion.
+
+1. mmqz/cpa-multi-plugins (MIT)
+   Base of this work copy: all plugins, scripts, CI workflow,
+   registry shape, docs. Copyright (c) 2026 mmqz, see LICENSE.
+
+2. Sliverkiss/cpa-plugin (MIT)
+   Protocol and plugin source for plugins/workbuddy (forked from
+   workbuddy v0.8.5) and plugins/qoder (forked from qoderwork
+   v0.2.6), including COSY signing, check-in, PAT import.
+   Copyright (c) 2026 Sliverkiss, see plugins/workbuddy/LICENSE
+   and plugins/qoder/LICENSE.
+
+3. Sliverkiss/traework2api (MIT)
+   Protocol layer for plugins/trae: auth, upstream, pool,
+   scheduler (Trae SOLO CN protocol layer).
+
+4. TriDefender/zcode-api
+   Behavior baseline for plugins/zcode: OAuth relay login, V4
+   signing, identity headers, billing plane, model catalog.
+   (No license conclusion stated here; see the upstream
+   repository for its terms.)
+
+5. zai-org/ZCode
+   Official open-source client used by plugins/zcode for
+   account-level wire protocol shapes only: start-plan anthropic
+   translation layer, official system blocks, business error code
+   table, off-peak ticketing wire contract.
+   (No license conclusion stated here; see the upstream
+   repository for its terms.)
+
+6. cockpit-tools (CC BY-NC-SA 4.0)
+   Protocol facts adapted in plugins/workbuddy and plugins/trae:
+   content filter bypass reference, check-in state machine,
+   check-in field parsing, check-in headers, v2 credits pack
+   priority, product_type mapping. CC BY-NC-SA 4.0 licensing
+   facts are documented, not remediated, in v0.1. Derived
+   segments inventory: docs/licensing/cockpit-derived-segments.md
+   (T5). No product carrying unremediated segments may be
+   publicly distributed or released; see docs/licensing/README.md.
+
+7. luode0320/cpa-workbuddy-plugin (MIT, port source)
+   Port source for the token-usage-tracker plugin and for the
+   usage-feed mechanism (NDJSON feed, rotation semantics).
+   Its token-usage-tracker/ subtree carries no LICENSE file and
+   no license marker was found in its files or history at the
+   time of writing: 「许可未证实—不可公开分发」. The tracker
+   plugin must not be publicly distributed until its license is
+   confirmed with upstream.
