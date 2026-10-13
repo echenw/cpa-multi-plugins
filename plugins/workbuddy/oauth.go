@@ -13,6 +13,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"strings"
 	"time"
 
@@ -191,8 +192,8 @@ func startLoginWithRegion(raw []byte, region string) ([]byte, error) {
 // authorize flow. The body may carry {region: cn|intl} (login_region /
 // variant keys are accepted too); when absent the login defaults to intl.
 // Any other non-empty value is a 400 and nothing is persisted. On success it
-// returns {auth_url, region}; the panel opens the URL and watches /accounts
-// for the new credential.
+// returns {auth_url, region, state, expires_at}; the panel shows the URL in
+// an in-panel OAuth modal and polls POST <base>/login/poll until success.
 func handleLoginStart(req pluginapi.ManagementRequest) (int, any) {
 	region, present, err := parseLoginRegionField(req.Body)
 	if err != nil {
@@ -213,18 +214,30 @@ func handleLoginStart(req pluginapi.ManagementRequest) (int, any) {
 	if uerr := json.Unmarshal(env.Result, &start); uerr != nil || start.URL == "" {
 		return http.StatusBadRequest, map[string]any{"error": "login start failed", "region": region}
 	}
-	return http.StatusOK, map[string]any{"auth_url": start.URL, "region": region}
+	return http.StatusOK, map[string]any{
+		"auth_url":   start.URL,
+		"region":     region,
+		"state":      start.State,
+		"expires_at": start.ExpiresAt,
+	}
 }
 
-func handlePollLogin(raw []byte) ([]byte, error) {
-	var req pluginapi.AuthLoginPollRequest
-	if err := json.Unmarshal(raw, &req); err != nil {
-		return nil, err
-	}
-	state := strings.TrimSpace(req.State)
-	if state == "" {
-		return nil, fmt.Errorf("poll: empty state")
-	}
+// loginPollOutcome is the panel-facing result of a single login poll attempt.
+// Status mirrors the host-poll vocabulary (pending | success | error) plus
+// "expired" synthesized for lost/timed-out login sessions so the panel can
+// show a restart hint without parsing error text.
+type loginPollOutcome struct {
+	Status  string
+	SA      *storedAuth
+	Message string
+	Err     error
+}
+
+// loadLoginCtx resolves an in-flight login session by state. Unknown states
+// (lost session — re-initiate login) and TTL-expired sessions (deleted here)
+// both surface restart-hint errors shared by the host poll RPC and the panel
+// poll/callback endpoints.
+func loadLoginCtx(state string) (*loginCtx, error) {
 	v, ok := loginStates.Load(state)
 	if !ok {
 		return nil, fmt.Errorf("poll: unknown state (restart login) — the login session was lost; please re-initiate login")
@@ -234,8 +247,15 @@ func handlePollLogin(raw []byte) ([]byte, error) {
 		loginStates.Delete(state)
 		return nil, fmt.Errorf("poll: login expired (5 min timeout) — please re-initiate login and complete within 5 minutes")
 	}
+	return lc, nil
+}
 
-	// Single-shot poll per RPC: the host drives the polling cadence.
+// attemptLoginPoll runs ONE login-completion attempt against the loginCtx's
+// cookie-affined client: auth/token is authoritative (non-zero business code
+// or 4xx = still pending; transport/5xx = real error), then login/account,
+// then plugin-side persist via persistLoginCredential and state deletion.
+// Identical mechanics for the host poll RPC and the panel endpoints.
+func attemptLoginPoll(state string, lc *loginCtx) loginPollOutcome {
 	// auth/token is the authoritative login-status endpoint: the application
 	// layer returns a non-zero code ("login ing") while pending, and code 0
 	// with the token bundle once complete. login/account sits behind the
@@ -252,20 +272,14 @@ func handlePollLogin(raw []byte) ([]byte, error) {
 		// surface them so the user sees a failure instead of polling until TTL.
 		if status == 0 || status >= 500 {
 			loginStates.Delete(state)
-			return nil, fmt.Errorf("poll: token endpoint error: %w — upstream may be temporarily unavailable; retry in a few minutes", errTok)
+			return loginPollOutcome{Status: string(pluginapi.AuthLoginStatusError), Err: fmt.Errorf("poll: token endpoint error: %w — upstream may be temporarily unavailable; retry in a few minutes", errTok)}
 		}
 		// 4xx / business-code responses mean the login is still pending.
-		return okEnvelope(pluginapi.AuthLoginPollResponse{
-			Status:  pluginapi.AuthLoginStatusPending,
-			Message: "waiting for login",
-		})
+		return loginPollOutcome{Status: string(pluginapi.AuthLoginStatusPending), Message: "waiting for login"}
 	}
 	var tok tokenData
 	if err := json.Unmarshal(tokRaw, &tok); err != nil || tok.AccessToken == "" {
-		return okEnvelope(pluginapi.AuthLoginPollResponse{
-			Status:  pluginapi.AuthLoginStatusPending,
-			Message: "waiting for login",
-		})
+		return loginPollOutcome{Status: string(pluginapi.AuthLoginStatusPending), Message: "waiting for login"}
 	}
 
 	acct, acctErr := fetchLoginAccount(lc.client, lc.region, state, tok.AccessToken)
@@ -288,7 +302,7 @@ func handlePollLogin(raw []byte) ([]byte, error) {
 		if acctErr == nil {
 			acctErr = fmt.Errorf("account payload carried no uid")
 		}
-		return nil, fmt.Errorf("login: upstream account endpoint returned no uid after retries (%v) — credential withheld; please retry login", acctErr)
+		return loginPollOutcome{Status: string(pluginapi.AuthLoginStatusError), Err: fmt.Errorf("login: upstream account endpoint returned no uid after retries (%v) — credential withheld; please retry login", acctErr)}
 	}
 
 	sa := &storedAuth{
@@ -328,10 +342,163 @@ func handlePollLogin(raw []byte) ([]byte, error) {
 	// costs the redundancy, never the login.
 	persistLoginCredential(sa)
 	loginStates.Delete(state)
-	return okEnvelope(pluginapi.AuthLoginPollResponse{
-		Status: pluginapi.AuthLoginStatusSuccess,
-		Auth:   toAuthData(sa),
-	})
+	return loginPollOutcome{Status: string(pluginapi.AuthLoginStatusSuccess), SA: sa}
+}
+
+// runLoginPollAttempt is attemptLoginPoll after the shared state lookup:
+// unknown/expired sessions map to the "expired" status carrying the same
+// restart-hint error the host poll RPC returns.
+func runLoginPollAttempt(state string) loginPollOutcome {
+	lc, err := loadLoginCtx(state)
+	if err != nil {
+		return loginPollOutcome{Status: "expired", Err: err}
+	}
+	return attemptLoginPoll(state, lc)
+}
+
+// loginPollStatusPayload maps one poll outcome to the panel status envelope
+// {status: pending|success|expired|error} shared by /login/poll and
+// /login/callback.
+func loginPollStatusPayload(out loginPollOutcome) map[string]any {
+	switch out.Status {
+	case string(pluginapi.AuthLoginStatusSuccess):
+		payload := map[string]any{"status": "success"}
+		if out.SA != nil {
+			payload["uid"] = out.SA.Account.UID
+			if out.SA.Account.Nickname != "" {
+				payload["nickname"] = out.SA.Account.Nickname
+			}
+		}
+		return payload
+	case string(pluginapi.AuthLoginStatusPending):
+		return map[string]any{"status": "pending", "message": out.Message}
+	case "expired":
+		return map[string]any{"status": "expired", "error": out.Err.Error()}
+	default:
+		msg := "login failed"
+		if out.Err != nil {
+			msg = out.Err.Error()
+		}
+		return map[string]any{"status": "error", "error": msg}
+	}
+}
+
+// handleLoginPoll serves POST <base>/login/poll for the in-panel OAuth modal.
+// The body carries {state} from POST <base>/login/start. It runs a single
+// poll attempt with the plugin's existing login-completion mechanics
+// (attemptLoginPoll: token probe → account fetch → persistLoginCredential →
+// state deletion) and returns {status: pending|success|expired|error}.
+// Unknown/expired states return the "expired" status with a restart hint
+// (mirroring the host poll RPC's error text); malformed bodies are 400.
+func handleLoginPoll(req pluginapi.ManagementRequest) (int, any) {
+	var body struct {
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal(req.Body, &body); err != nil {
+		return http.StatusBadRequest, map[string]any{"error": "login poll: invalid JSON body — please restart the login flow"}
+	}
+	state := strings.TrimSpace(body.State)
+	if state == "" {
+		return http.StatusBadRequest, map[string]any{"error": "poll: empty state — please restart the login flow"}
+	}
+	return http.StatusOK, loginPollStatusPayload(runLoginPollAttempt(state))
+}
+
+// parseLoginCallbackBody extracts the {state, callback_url} pair from a
+// POST <base>/login/callback body. callback_url accepts the callback_url /
+// callbackUrl / callback key spellings (the panel sends callback_url).
+func parseLoginCallbackBody(raw []byte) (state, callbackURL string, err error) {
+	var m map[string]json.RawMessage
+	if uerr := json.Unmarshal(raw, &m); uerr != nil || len(m) == 0 {
+		return "", "", fmt.Errorf("login callback: invalid JSON body — please restart the login flow")
+	}
+	for mk, mv := range m {
+		switch strings.ToLower(strings.TrimSpace(mk)) {
+		case "state":
+			var s string
+			if uerr := json.Unmarshal(mv, &s); uerr != nil {
+				s = strings.Trim(string(mv), "\"'")
+			}
+			state = strings.TrimSpace(strings.Trim(s, "\"'"))
+		case "callback_url", "callbackurl", "callback":
+			var s string
+			if uerr := json.Unmarshal(mv, &s); uerr != nil {
+				s = strings.Trim(string(mv), "\"'")
+			}
+			callbackURL = strings.TrimSpace(strings.Trim(s, "\"'"))
+		}
+	}
+	return state, callbackURL, nil
+}
+
+// handleLoginCallback serves POST <base>/login/callback for the in-panel
+// OAuth modal. The body carries {state, callback_url}: the callback URL the
+// user pasted from the browser address bar after authorizing. WorkBuddy's
+// login mechanics complete purely via the auth/token probe keyed by state
+// (there is no authCode-exchange flow to feed), so after validating the
+// pair the handler runs one immediate poll attempt (attemptLoginPoll) and
+// returns its {status: pending|success|expired|error} envelope. A callback
+// URL carrying a *different* state query param is a 400 (wrong login pasted).
+// Invalid region in the body is a 400 and nothing is stored; unknown/expired
+// states return the restart-hint error.
+func handleLoginCallback(req pluginapi.ManagementRequest) (int, any) {
+	// A valid region echo is accepted and ignored: the login realm is
+	// already pinned on the stored loginCtx at start time.
+	if _, _, err := parseLoginRegionField(req.Body); err != nil {
+		return http.StatusBadRequest, map[string]any{"error": err.Error()}
+	}
+	state, callbackURL, err := parseLoginCallbackBody(req.Body)
+	if err != nil {
+		return http.StatusBadRequest, map[string]any{"error": err.Error()}
+	}
+	if state == "" {
+		return http.StatusBadRequest, map[string]any{"error": "login callback: empty state — please restart the login flow"}
+	}
+	lc, err := loadLoginCtx(state)
+	if err != nil {
+		return http.StatusBadRequest, map[string]any{"error": err.Error()}
+	}
+	if callbackURL == "" {
+		return http.StatusBadRequest, map[string]any{"error": "login callback: empty callback_url — authorize in the opened link, then paste the full browser address-bar URL"}
+	}
+	if u, uerr := url.Parse(callbackURL); uerr == nil && u != nil {
+		if echoed := strings.TrimSpace(u.Query().Get("state")); echoed != "" && echoed != state {
+			return http.StatusBadRequest, map[string]any{"error": "login callback: pasted URL belongs to a different login (state mismatch) — paste the URL from THIS login attempt, or restart the login flow"}
+		}
+	}
+	return http.StatusOK, loginPollStatusPayload(attemptLoginPoll(state, lc))
+}
+
+func handlePollLogin(raw []byte) ([]byte, error) {
+	var req pluginapi.AuthLoginPollRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return nil, err
+	}
+	state := strings.TrimSpace(req.State)
+	if state == "" {
+		return nil, fmt.Errorf("poll: empty state")
+	}
+	lc, err := loadLoginCtx(state)
+	if err != nil {
+		return nil, err
+	}
+
+	// Single-shot poll per RPC: the host drives the polling cadence.
+	out := attemptLoginPoll(state, lc)
+	switch out.Status {
+	case string(pluginapi.AuthLoginStatusPending):
+		return okEnvelope(pluginapi.AuthLoginPollResponse{
+			Status:  pluginapi.AuthLoginStatusPending,
+			Message: "waiting for login",
+		})
+	case string(pluginapi.AuthLoginStatusSuccess):
+		return okEnvelope(pluginapi.AuthLoginPollResponse{
+			Status: pluginapi.AuthLoginStatusSuccess,
+			Auth:   toAuthData(out.SA),
+		})
+	default:
+		return nil, out.Err
+	}
 }
 
 // persistLoginCredential writes the just-minted login credential to the host

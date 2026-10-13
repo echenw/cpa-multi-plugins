@@ -167,7 +167,9 @@ func managementRegistration() managementRegistrationResponse {
 			{Method: http.MethodPost, Path: base + "/keepalive", Description: "Manually refresh access tokens for all accounts (or one with auth_index)."},
 			{Method: http.MethodGet, Path: base + "/keepalive/status", Description: "Last keepalive run summary + config."},
 			{Method: http.MethodGet, Path: base + "/models/groups", Description: "Per-realm model catalog (model_cache snapshots; ?refresh=1 re-discovers) for the panel's exclusion picker."},
-			{Method: http.MethodPost, Path: base + "/login/start", Description: "Start a panel login in the selected realm (body: {region: cn|intl}, default intl; invalid region rejected with 400). Returns {auth_url, region}."},
+			{Method: http.MethodPost, Path: base + "/login/start", Description: "Start a panel login in the selected realm (body: {region: cn|intl}, default intl; invalid region rejected with 400). Returns {auth_url, region, state, expires_at}."},
+		{Method: http.MethodPost, Path: base + "/login/poll", Description: "Poll one in-panel login attempt (body: {state}). Returns {status: pending|success|expired|error}."},
+		{Method: http.MethodPost, Path: base + "/login/callback", Description: "Submit the pasted browser callback URL for one login attempt (body: {state, callback_url}); runs one immediate poll attempt and returns its {status}."},
 		},
 		Resources: []resourceRoute{
 			{Path: "/panel", Menu: "WorkBuddy", Description: "WorkBuddy dashboard: credits, check-in, plan, import."},
@@ -244,6 +246,12 @@ func handleManagement(raw []byte) ([]byte, error) {
 		return okEnvelope(mgmtJSONResponse(status, payload))
 	case req.Method == http.MethodPost && path == base+"/login/start":
 		status, payload := handleLoginStart(req)
+		return okEnvelope(mgmtJSONResponse(status, payload))
+	case req.Method == http.MethodPost && path == base+"/login/poll":
+		status, payload := handleLoginPoll(req)
+		return okEnvelope(mgmtJSONResponse(status, payload))
+	case req.Method == http.MethodPost && path == base+"/login/callback":
+		status, payload := handleLoginCallback(req)
 		return okEnvelope(mgmtJSONResponse(status, payload))
 	}
 	return okEnvelope(mgmtJSONResponse(http.StatusNotFound, map[string]any{"error": "not found: " + path}))

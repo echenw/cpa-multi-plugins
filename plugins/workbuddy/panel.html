@@ -190,8 +190,7 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
     </div>
   </div>
   <div class="bar">
-    <button id="loginBtn" onclick="loginStart(this)">授权登录</button>
-    <label class="toggle" title="授权登录的目标区域（默认 Intl）"><input type="radio" name="loginRegion" value="intl" checked> Intl <input type="radio" name="loginRegion" value="cn"> CN</label>
+    <button id="loginBtn" onclick="openLoginModal()">授权登录</button>
     <button class="sec" id="importBtn" onclick="openImportModal()">导入凭证</button>
     <button id="refreshBtn" onclick="load(true,this)">刷新数据</button>
     <button class="sec" onclick="checkinAll(this)">全部签到</button>
@@ -239,6 +238,34 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
     <div class="modal-ft">
       <button type="button" class="sec" onclick="closeImportModal()">取消</button>
       <button type="button" onclick="importAuth(this)">导入并保存</button>
+    </div>
+  </div>
+</div>
+<div class="modal-mask" id="loginModal" onclick="onLoginMaskClick(event)">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="loginModalTitle">
+    <div class="modal-hd">
+      <h2 id="loginModalTitle">授权登录</h2>
+      <button type="button" class="modal-x" onclick="closeLoginModal()" aria-label="关闭">×</button>
+    </div>
+    <div class="modal-bd">
+      <p class="hint">按步骤完成授权：先打开授权链接完成上游登录，再把浏览器地址栏的回调地址粘贴回来提交；弹窗保持打开，登录成功自动关闭并刷新。默认 <code>Intl</code>，切换区域会重新开始。</p>
+      <div style="margin-bottom:12px"><label class="toggle" title="授权登录的目标区域（默认 Intl；切换会重新开始）"><input type="radio" name="loginModalRegion" value="intl" checked onchange="loginModalStart()"> Intl <input type="radio" name="loginModalRegion" value="cn" onchange="loginModalStart()"> CN</label></div>
+      <div style="font-weight:600;margin-bottom:6px">步骤 1 · 打开授权链接</div>
+      <div style="display:flex;gap:8px;margin-bottom:12px">
+        <input id="loginAuthUrl" class="field-input" readonly placeholder="正在获取授权链接…">
+        <button type="button" class="sec" onclick="copyLoginUrl()">复制</button>
+        <button type="button" onclick="openLoginUrl()">打开链接</button>
+      </div>
+      <div style="font-weight:600;margin-bottom:6px">步骤 2 · 粘贴回调地址并提交</div>
+      <div style="display:flex;gap:8px;margin-bottom:12px">
+        <input id="loginCallbackUrl" class="field-input" placeholder="粘贴授权后浏览器地址栏的完整 URL">
+        <button type="button" onclick="submitLoginCallback(this)">提交</button>
+      </div>
+      <div id="loginStatus" style="color:var(--mut);font-size:12px;min-height:18px"></div>
+    </div>
+    <div class="modal-ft">
+      <button type="button" class="sec" id="loginModalRestart" onclick="loginModalStart(this)">重新开始</button>
+      <button type="button" class="sec" onclick="closeLoginModal()">取消</button>
     </div>
   </div>
 </div>
@@ -1068,40 +1095,117 @@ async function importAuth(btn){
   }catch(e){toast("导入请求失败","err",e.message)}
   busy(btn,false);
 }
-/* ===== 授权登录（管理面板区域选择，默认 Intl）=====
-   POST /login/start {region} → {auth_url, region}；新标签页打开授权链接，
-   轮询 /accounts 检测新账号（与列表加载同一数据源），出现即刷新视图。 */
-function panelLoginRegion(){
-  const el=document.querySelector('input[name="loginRegion"]:checked');
+/* ===== 授权登录（站内 OAuth 弹窗）=====
+   POST /login/start {region} → {auth_url, region, state, expires_at}；
+   弹窗内步骤 1 展示只读授权链接（复制/打开链接，新标签页打开且弹窗保持），
+   步骤 2 粘贴回调地址 POST /login/callback；状态行每 ~5s POST /login/poll
+   直到成功（关弹窗 + load(true)）或过期（重启提示）。区域切换重新开始。 */
+let loginModalState="", loginModalUrl="", loginModalTimer=null;
+function loginModalRegion(){
+  const el=document.querySelector('input[name="loginModalRegion"]:checked');
   return el?el.value:"intl";
 }
-async function loginStart(btn){
+function openLoginModal(){
+  document.getElementById("loginModal").classList.add("show");
+  loginModalStart();
+}
+function closeLoginModal(){
+  document.getElementById("loginModal").classList.remove("show");
+  stopLoginPoll();
+}
+function onLoginMaskClick(e){
+  if(e.target===document.getElementById("loginModal")) closeLoginModal();
+}
+function setLoginStatus(text, kind){
+  const el=document.getElementById("loginStatus");
+  if(!el) return;
+  el.textContent=text||"";
+  el.style.color=kind==="err"?"var(--err)":kind==="ok"?"var(--ok)":"var(--mut)";
+}
+function stopLoginPoll(){
+  if(loginModalTimer){clearTimeout(loginModalTimer);loginModalTimer=null}
+}
+function scheduleLoginPoll(){
+  stopLoginPoll();
+  loginModalTimer=setTimeout(pollLoginModal,5000);
+}
+async function loginModalStart(btn){
+  stopLoginPoll();
+  loginModalState=""; loginModalUrl="";
+  document.getElementById("loginAuthUrl").value="";
+  document.getElementById("loginCallbackUrl").value="";
+  setLoginStatus("正在获取授权链接…");
   busy(btn,true);
   try{
-    const before=new Set((lastAccounts||[]).map(a=>a.auth_index));
-    const d=await api("/login/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({region:panelLoginRegion()})});
-    if(d.error){toast("授权登录失败","err",d.error);busy(btn,false);return}
-    const url=d.auth_url||"";
-    if(!url){toast("授权登录失败","err","上游未返回授权链接");busy(btn,false);return}
-    window.open(url,"_blank");
-    toast("已打开授权页","ok","在新标签页完成授权（"+(d.region||"intl")+"），面板将自动检测新账号");
-    pollLoginAccount(before,Date.now()+5*60*1000);
-  }catch(e){toast("授权登录请求失败","err",e.message)}
-  busy(btn,false);
+    const d=await api("/login/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({region:loginModalRegion()})});
+    if(d.error){setLoginStatus("授权登录失败："+d.error,"err");toast("授权登录失败","err",d.error);return}
+    if(!d.auth_url||!d.state){setLoginStatus("上游未返回授权链接，请点重新开始","err");return}
+    loginModalState=d.state; loginModalUrl=d.auth_url;
+    document.getElementById("loginAuthUrl").value=d.auth_url;
+    setLoginStatus("已生成授权链接（"+(d.region||"intl")+"），按步骤 1 在新标签页完成授权");
+    scheduleLoginPoll();
+  }catch(e){setLoginStatus("授权登录请求失败："+(e.message||e),"err");toast("授权登录请求失败","err",e.message)}
+  finally{busy(btn,false)}
 }
-async function pollLoginAccount(before, deadline){
+function copyLoginUrl(){
+  const t=document.getElementById("loginAuthUrl").value||"";
+  if(!t){toast("还没有授权链接","warn");return}
+  const done=()=>toast("已复制","ok",t.slice(0,80));
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(t).then(done).catch(()=>fallbackCopy(t,done));
+  }else fallbackCopy(t,done);
+}
+function openLoginUrl(){
+  if(!loginModalUrl){toast("还没有授权链接","warn");return}
+  window.open(loginModalUrl,"_blank");
+  toast("已打开授权页","ok","在新标签页完成授权后回到本弹窗粘贴回调地址");
+}
+function handleLoginPollResult(d){
+  if(!d||typeof d!=="object") return;
+  if(d.status==="success"){
+    const who=d.nickname||d.uid||"";
+    setLoginStatus("登录成功"+(who?"："+who:""),"ok");
+    toast("登录成功","ok",who);
+    closeLoginModal();
+    load(true);
+    return;
+  }
+  if(d.status==="pending"){setLoginStatus(d.message||"等待授权…");return}
+  if(d.status==="expired"){
+    setLoginStatus((d.error||"登录已过期")+" —— 请切换区域或点重新开始","err");
+    toast("登录已过期","warn","请重新开始授权登录");
+    stopLoginPoll();
+    return;
+  }
+  if(d.status==="error"){
+    setLoginStatus(d.error||"登录失败","err");
+    toast("登录失败","err",d.error||"");
+    stopLoginPoll();
+    return;
+  }
+  if(d.error)setLoginStatus(d.error,"err");
+}
+async function submitLoginCallback(btn){
+  const cb=(document.getElementById("loginCallbackUrl").value||"").trim();
+  if(!loginModalState){toast("请先获取授权链接","warn");return}
+  if(!cb){toast("请粘贴回调地址","warn");return}
+  busy(btn,true);
   try{
-    const d=await api("/accounts");
-    const accs=d.accounts||[];
-    const fresh=accs.filter(a=>!before.has(a.auth_index));
-    if(fresh.length){
-      const who=fresh.map(a=>a.nickname||a.auth_index).join("、");
-      toast("检测到新账号","ok",who);
-      await load(true);
-      return;
-    }
-  }catch(_){}
-  if(Date.now()<deadline)setTimeout(()=>pollLoginAccount(before,deadline),5000);
+    const d=await api("/login/callback",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({state:loginModalState,callback_url:cb})});
+    handleLoginPollResult(d);
+    if(d&&d.status==="pending")scheduleLoginPoll();
+  }catch(e){setLoginStatus("回调提交失败："+(e.message||e),"err");toast("回调提交失败","err",e.message)}
+  finally{busy(btn,false)}
+}
+async function pollLoginModal(){
+  loginModalTimer=null;
+  if(!loginModalState) return;
+  if(!document.getElementById("loginModal").classList.contains("show")) return;
+  try{
+    const d=await api("/login/poll",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({state:loginModalState})});
+    handleLoginPollResult(d);
+    if(d&&d.status==="pending")scheduleLoginPoll();
+  }catch(e){setLoginStatus("登录状态查询失败："+(e.message||e),"err")}
 }
 /* ===== 模型禁用（v0.9.40）=====
    目录：GET /plugins/workbuddy/models/groups（插件按 realm 聚合 model_cache
@@ -1214,7 +1318,10 @@ async function modelGroupsSave(btn){
 }
 document.getElementById("keyInput").addEventListener("keydown",e=>{if(e.key==="Enter")saveKey()});
 document.addEventListener("keydown",e=>{
-  if(e.key=="Escape"&&document.getElementById("importModal").classList.contains("show")) closeImportModal();
+  if(e.key=="Escape"){
+    if(document.getElementById("loginModal").classList.contains("show")) closeLoginModal();
+    if(document.getElementById("importModal").classList.contains("show")) closeImportModal();
+  }
 });
 /* Start theme sync watcher (parent MutationObserver + standalone prefers-color-scheme listener). */
 if(window.__wbThemeSync)window.__wbThemeSync();

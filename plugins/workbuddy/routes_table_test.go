@@ -59,6 +59,8 @@ func TestManagementRoutesTableIntegrity(t *testing.T) {
 		{http.MethodPost, "/keepalive"},
 		{http.MethodGet, "/keepalive/status"},
 		{http.MethodPost, "/login/start"},
+		{http.MethodPost, "/login/poll"},
+		{http.MethodPost, "/login/callback"},
 	}
 	for _, w := range want {
 		key := w.method + " " + base + w.suffix
