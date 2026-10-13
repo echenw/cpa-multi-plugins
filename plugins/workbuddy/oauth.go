@@ -139,9 +139,9 @@ func loginAccountBaseFor(region string) string {
 }
 
 func handleStartLogin(raw []byte) ([]byte, error) {
-	// T24: request-carried region wins (default intl); sticky login_region
-	// is the fallback only. Illegal values fail before any network I/O.
-	region, err := resolveRequestLoginRegion(raw, loadedLoginRegion())
+	// Request-carried region only (default intl). Illegal values fail before
+	// any network I/O.
+	region, err := resolveRequestLoginRegion(raw)
 	if err != nil {
 		return nil, err
 	}
@@ -149,14 +149,13 @@ func handleStartLogin(raw []byte) ([]byte, error) {
 }
 
 // startLoginWithRegion starts a login flow pinned to region. The host RPC
-// entry (handleStartLogin) prefers the request-carried region (T24, default
-// intl); the plugin config (login_region dropdown) is the fallback and stays
-// STICKY (v0.12.10).
+// entry (handleStartLogin) resolves the request-carried region (default
+// intl); there is no config fallback.
 func startLoginWithRegion(raw []byte, region string) ([]byte, error) {
-	// T24: only cn/intl route; anything else is an explicit rejection (the
-	// stored selection is untouched — this path never writes config).
+	// Only cn/intl route; anything else is an explicit rejection (this path
+	// never writes config).
 	if region != regionCN && region != regionIntl {
-		return nil, fmt.Errorf("invalid login region %q: want \"cn\" or \"intl\" (default \"intl\"); current selection unchanged", region)
+		return nil, fmt.Errorf("invalid login region %q: want \"cn\" or \"intl\" (default \"intl\")", region)
 	}
 	client := newLoginClient()
 	platform := currentLoginPlatform()
@@ -184,8 +183,37 @@ func startLoginWithRegion(raw []byte, region string) ([]byte, error) {
 		URL:       st.AuthURL,
 		State:     st.State,
 		ExpiresAt: time.Now().Add(loginTTL).UTC(),
-		Metadata:  withLoginRegionMetadata(map[string]any{"logo": pluginLogoURL}, region),
+		Metadata:  map[string]any{"logo": pluginLogoURL},
 	})
+}
+
+// handleLoginStart serves POST <base>/login/start for the management panel
+// authorize flow. The body may carry {region: cn|intl} (login_region /
+// variant keys are accepted too); when absent the login defaults to intl.
+// Any other non-empty value is a 400 and nothing is persisted. On success it
+// returns {auth_url, region}; the panel opens the URL and watches /accounts
+// for the new credential.
+func handleLoginStart(req pluginapi.ManagementRequest) (int, any) {
+	region, present, err := parseLoginRegionField(req.Body)
+	if err != nil {
+		return http.StatusBadRequest, map[string]any{"error": err.Error()}
+	}
+	if !present {
+		region = defaultRequestLoginRegion
+	}
+	out, err := startLoginWithRegion(req.Body, region)
+	if err != nil {
+		return http.StatusBadRequest, map[string]any{"error": err.Error(), "region": region}
+	}
+	var env envelope
+	if uerr := json.Unmarshal(out, &env); uerr != nil || !env.OK {
+		return http.StatusBadRequest, map[string]any{"error": "login start failed", "region": region}
+	}
+	var start pluginapi.AuthLoginStartResponse
+	if uerr := json.Unmarshal(env.Result, &start); uerr != nil || start.URL == "" {
+		return http.StatusBadRequest, map[string]any{"error": "login start failed", "region": region}
+	}
+	return http.StatusOK, map[string]any{"auth_url": start.URL, "region": region}
 }
 
 func handlePollLogin(raw []byte) ([]byte, error) {

@@ -58,6 +58,7 @@ func TestManagementRoutesTableIntegrity(t *testing.T) {
 		{http.MethodPost, "/select"},
 		{http.MethodPost, "/keepalive"},
 		{http.MethodGet, "/keepalive/status"},
+		{http.MethodPost, "/login/start"},
 	}
 	for _, w := range want {
 		key := w.method + " " + base + w.suffix
@@ -68,6 +69,10 @@ func TestManagementRoutesTableIntegrity(t *testing.T) {
 }
 
 func TestManagementRoutesDispatchSmoke(t *testing.T) {
+	// Redirect the login endpoints to a hermetic server: POST /login/start
+	// is a declared route and the smoke dispatches it with `{}` (default
+	// intl), which would otherwise call the real upstream auth/state.
+	_, _ = withLoginEndpointsServer(t)
 	// Reset the plugin-layer rate limiter: the smoke dispatches several POST
 	// routes back-to-back and the shared "_global" bucket would otherwise
 	// return 429 for the tail (an acceptable non-404, but noisy).

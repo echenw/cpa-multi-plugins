@@ -38,7 +38,7 @@ import (
 var modelGroupRealmOrder = []string{"cn", "global", "intl"}
 
 // modelGroupRealmLabel renders the human-facing realm title. Keep in sync
-// with the login_region enum description in main.go and the panel badges.
+// with the login-platform config description in main.go and the panel badges.
 func modelGroupRealmLabel(realm string) string {
 	switch realm {
 	case "cn":

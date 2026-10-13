@@ -2,22 +2,24 @@ package main
 
 import "testing"
 
-// TestSplitBuildPinWiring verifies the split-channel build injection chain
-// end-to-end: run once WITHOUT ldflags (unified flavor: pin empty, default
-// stays intl per T24) and once WITH
+// TestSplitBuildPinWiring verifies the split-channel build injection chain:
+// config-file region switching is deleted, so the login realm always
+// resolves from the request (default intl) regardless of the build-time pin.
+// Run once WITHOUT ldflags (unified flavor: pin empty) and once WITH
 //
 //	go test -ldflags "-X main.pluginVariantPin=intl" -run TestSplitBuildPinWiring
 //
-// (split flavor: the sticky login-region default must equal the pin).
+// (split flavor: the pin is a validated no-op, the login default stays intl).
 func TestSplitBuildPinWiring(t *testing.T) {
 	switch pluginVariantPin {
-	case "":
-		if got := loadedLoginRegion(); got != regionIntl {
-			t.Fatalf("unified flavor: login default = %q, want %q", got, regionIntl)
+	case "", "cn", "intl":
+		applyVariantPin()
+		got, err := resolveRequestLoginRegion([]byte(`{}`))
+		if err != nil {
+			t.Fatalf("resolve: %v", err)
 		}
-	case "cn", "intl":
-		if got := loadedLoginRegion(); got != pluginVariantPin {
-			t.Fatalf("split flavor pin=%s: login default = %q, want the pin", pluginVariantPin, got)
+		if got != regionIntl {
+			t.Fatalf("pin=%q: default login realm = %q, want %q", pluginVariantPin, got, regionIntl)
 		}
 	default:
 		t.Fatalf("invalid pin %q leaked through", pluginVariantPin)

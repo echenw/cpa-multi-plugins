@@ -1,20 +1,18 @@
-// region_switch.go — T24: request-carried login region + panel selector.
+// region_switch.go — request-carried login region for NEW logins.
 //
-// The authorization popup selects its realm per login attempt (default intl,
-// switchable to cn) instead of only via the config-file login_region:
+// The login realm for one login attempt comes from the request only
+// (default intl). Config-file region switching is deleted, the host popup
+// carries no selector, and region selection lives in the management panel
+// (POST <base>/login/start, default Intl with a CN toggle).
 //   - auth.login_start requests may carry one of the keys region /
 //     login_region / variant (top-level JSON string). When present it wins;
-//     when absent the sticky login_region config stays the fallback.
-//     An empty fallback resolves to intl.
+//     when absent the login defaults to intl.
 //   - Only cn/intl are accepted from the request. Any other non-empty value
-//     is an explicit error and the stored selection is left untouched (no
-//     config files are written by this path, ever).
-//   - The selector (options + default + current) is surfaced in the
-//     login-start response Metadata and at GET <base>/login/region.
+//     is an explicit error (no config files are written by this path, ever).
 //   - Per-account routing (realmForStorage / upstreamBaseForRegion) is
 //     untouched: existing accounts keep the realm recorded at login/import
 //     time. Global (workbuddy.ai) accounts are still added via panel
-//     credential import, never via this selector.
+//     credential import.
 package main
 
 import (
@@ -23,11 +21,7 @@ import (
 	"strings"
 )
 
-// loginRegionOptions is the exact selector surface: cn/intl only, default intl.
-var loginRegionOptions = []string{regionCN, regionIntl}
-
-// defaultRequestLoginRegion is the login realm when neither the request nor
-// the sticky config names one.
+// defaultRequestLoginRegion is the login realm when the request names none.
 const defaultRequestLoginRegion = regionIntl
 
 // parseLoginRegionField scans a raw auth.login_start request for a
@@ -57,58 +51,22 @@ func parseLoginRegionField(raw []byte) (string, bool, error) {
 			case regionCN, regionIntl:
 				return v, true, nil
 			default:
-				return "", true, fmt.Errorf("invalid login region %q: want \"cn\" or \"intl\" (default \"intl\"); current selection unchanged", s)
+				return "", true, fmt.Errorf("invalid login region %q: want \"cn\" or \"intl\" (default \"intl\")", s)
 			}
 		}
 	}
 	return "", false, nil
 }
 
-// resolveRequestLoginRegion prefers the request-carried region (T24) and
-// falls back to the sticky login_region config (which stays as the fallback
-// default only, sticky semantics in usage_config.go untouched). An empty
-// fallback resolves to intl.
-func resolveRequestLoginRegion(raw []byte, fallback string) (string, error) {
+// resolveRequestLoginRegion resolves the login realm for one login attempt
+// from the request-carried region only (T24). Absent keys default to intl.
+func resolveRequestLoginRegion(raw []byte) (string, error) {
 	if v, present, err := parseLoginRegionField(raw); present {
 		if err != nil {
 			return "", err
 		}
 		return v, nil
 	}
-	if strings.TrimSpace(fallback) == "" {
-		return defaultRequestLoginRegion, nil
-	}
-	if strings.EqualFold(strings.TrimSpace(fallback), regionIntl) {
-		return regionIntl, nil
-	}
-	return regionCN, nil
+	return defaultRequestLoginRegion, nil
 }
 
-// loginRegionSelector is the panel/login-start selector payload.
-type loginRegionSelector struct {
-	Options []string `json:"options"`
-	Default string   `json:"default"`
-	Current string   `json:"current"`
-}
-
-// loginRegionSelectorPayload reports the cn/intl options (default intl) plus
-// the current sticky selection. Read-only: it never writes config files.
-func loginRegionSelectorPayload() loginRegionSelector {
-	return loginRegionSelector{
-		Options: append([]string(nil), loginRegionOptions...),
-		Default: defaultRequestLoginRegion,
-		Current: loadedLoginRegion(),
-	}
-}
-
-// withLoginRegionMetadata stamps the selector onto a login-start response
-// Metadata map (login-start surface, no config writes).
-func withLoginRegionMetadata(md map[string]any, current string) map[string]any {
-	if md == nil {
-		md = map[string]any{}
-	}
-	md["region"] = current
-	md["region_options"] = append([]string(nil), loginRegionOptions...)
-	md["region_default"] = defaultRequestLoginRegion
-	return md
-}

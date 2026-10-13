@@ -2,8 +2,8 @@ package main
 
 // Issue #36（Part 2）— 登录平台血统持久化测试。
 //
-// startLoginWithRegion 按 login_platform / login_region 决定 OAuth 入口与
-// 登录头族，但 handlePollLogin 成功后构造的 storedAuth 从不写
+// startLoginWithRegion 按 login_platform 配置与 request-carried login_region
+// 决定 OAuth 入口与登录头族，但 handlePollLogin 成功后构造的 storedAuth 从不写
 // sa.Auth.LoginPlatform → IDE 流程铸造的 token 在聊天时以 CLI 头族出现
 //（token 血统 vs 请求方言错配）。这里用 httptest 服务器驱动完整登录流
 //（state → poll → account），钉死三种平台的持久化结果。

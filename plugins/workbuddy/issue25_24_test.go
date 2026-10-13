@@ -7,9 +7,11 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
-// Issue #24: login_region / login_platform must be sticky across bare
-// reconfigures and must also be seen when the host sends the config as a
-// flow-style mapping or JSON — neither of which the line-scan can match.
+// Issue #24: login_platform must be sticky across bare reconfigures and must
+// also be seen when the host sends the config as a flow-style mapping or
+// JSON — neither of which the line-scan can match. Config-file login region
+// switching is deleted: a login_region key is ignored and the login realm
+// always resolves from the request (default intl).
 
 func wbConfigureWire(t *testing.T, cfg string) {
 	t.Helper()
@@ -22,56 +24,49 @@ func wbConfigureWire(t *testing.T, cfg string) {
 	configure(raw)
 }
 
-func TestWorkbuddyConfigureStickyLoginRegion(t *testing.T) {
-	oldRegion, oldPlatform := loginRegion, loginPlatform
+func TestWorkbuddyConfigureStickyLoginPlatform(t *testing.T) {
+	oldPlatform := loginPlatform
 	t.Cleanup(func() {
-		loginRegionMu.Lock()
-		loginRegion = oldRegion
-		loginRegionMu.Unlock()
 		loginPlatformMu.Lock()
 		loginPlatform = oldPlatform
 		loginPlatformMu.Unlock()
 	})
 
-	wbConfigureWire(t, "enabled: true\nlogin_region: intl\nlogin_platform: ide\npriority: 0\n")
-	if loginRegion != regionIntl {
-		t.Fatalf("block-style intl not applied: %q", loginRegion)
-	}
+	wbConfigureWire(t, "enabled: true\nlogin_platform: ide\npriority: 0\n")
 	if loginPlatform != "ide" {
 		t.Fatalf("login_platform ide not applied: %q", loginPlatform)
 	}
 
-	// Bare reconfigure (auth-store churn) must NOT reset to cn/CLI.
+	// Bare reconfigure (auth-store churn) must NOT reset to CLI.
 	wbConfigureWire(t, "enabled: true\npriority: 0\n")
-	if loginRegion != regionIntl || loginPlatform != "ide" {
-		t.Fatalf("bare reconfigure reset sticky values: region=%q platform=%q", loginRegion, loginPlatform)
+	if loginPlatform != "ide" {
+		t.Fatalf("bare reconfigure reset sticky platform: %q", loginPlatform)
 	}
 
 	// Explicit switch back still works.
-	wbConfigureWire(t, "enabled: true\nlogin_region: cn\nlogin_platform: CLI\n")
-	if loginRegion != regionCN || loginPlatform != "CLI" {
-		t.Fatalf("explicit reset not applied: region=%q platform=%q", loginRegion, loginPlatform)
+	wbConfigureWire(t, "enabled: true\nlogin_platform: CLI\n")
+	if loginPlatform != "CLI" {
+		t.Fatalf("explicit reset not applied: platform=%q", loginPlatform)
 	}
 }
 
-func TestWorkbuddyConfigureFlowStyleAndJSON(t *testing.T) {
-	oldRegion := loginRegion
-	t.Cleanup(func() {
-		loginRegionMu.Lock()
-		loginRegion = oldRegion
-		loginRegionMu.Unlock()
-	})
-
-	// Flow-style mapping: the line-scan sees one line, the YAML decode must.
-	wbConfigureWire(t, "{enabled: true, login_region: intl, priority: 0}\n")
-	if loginRegion != regionIntl {
-		t.Fatalf("flow-style intl not applied: %q", loginRegion)
-	}
-
-	// JSON payload (YAML subset).
-	wbConfigureWire(t, `{"enabled":true,"login_region":"intl"}`)
-	if loginRegion != regionIntl {
-		t.Fatalf("JSON intl not applied: %q", loginRegion)
+func TestWorkbuddyConfigureLoginRegionIgnored(t *testing.T) {
+	// A login_region key in any serialization style must not move the login
+	// realm: resolution is request-only with an intl default.
+	for _, cfg := range []string{
+		"enabled: true\nlogin_region: intl\npriority: 0\n",
+		"enabled: true\nlogin_region: cn\npriority: 0\n",
+		"{enabled: true, login_region: intl, priority: 0}\n",
+		`{"enabled":true,"login_region":"intl"}`,
+	} {
+		wbConfigureWire(t, cfg)
+		got, err := resolveRequestLoginRegion([]byte(`{}`))
+		if err != nil {
+			t.Fatalf("cfg %q: resolve: %v", cfg, err)
+		}
+		if got != regionIntl {
+			t.Fatalf("cfg %q: default login realm = %q, want intl", cfg, got)
+		}
 	}
 }
 

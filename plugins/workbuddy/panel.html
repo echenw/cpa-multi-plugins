@@ -190,6 +190,8 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
     </div>
   </div>
   <div class="bar">
+    <button id="loginBtn" onclick="loginStart(this)">授权登录</button>
+    <label class="toggle" title="授权登录的目标区域（默认 Intl）"><input type="radio" name="loginRegion" value="intl" checked> Intl <input type="radio" name="loginRegion" value="cn"> CN</label>
     <button class="sec" id="importBtn" onclick="openImportModal()">导入凭证</button>
     <button id="refreshBtn" onclick="load(true,this)">刷新数据</button>
     <button class="sec" onclick="checkinAll(this)">全部签到</button>
@@ -1065,6 +1067,41 @@ async function importAuth(btn){
     }else toast("导入失败","err",d.error||"unknown");
   }catch(e){toast("导入请求失败","err",e.message)}
   busy(btn,false);
+}
+/* ===== 授权登录（管理面板区域选择，默认 Intl）=====
+   POST /login/start {region} → {auth_url, region}；新标签页打开授权链接，
+   轮询 /accounts 检测新账号（与列表加载同一数据源），出现即刷新视图。 */
+function panelLoginRegion(){
+  const el=document.querySelector('input[name="loginRegion"]:checked');
+  return el?el.value:"intl";
+}
+async function loginStart(btn){
+  busy(btn,true);
+  try{
+    const before=new Set((lastAccounts||[]).map(a=>a.auth_index));
+    const d=await api("/login/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({region:panelLoginRegion()})});
+    if(d.error){toast("授权登录失败","err",d.error);busy(btn,false);return}
+    const url=d.auth_url||"";
+    if(!url){toast("授权登录失败","err","上游未返回授权链接");busy(btn,false);return}
+    window.open(url,"_blank");
+    toast("已打开授权页","ok","在新标签页完成授权（"+(d.region||"intl")+"），面板将自动检测新账号");
+    pollLoginAccount(before,Date.now()+5*60*1000);
+  }catch(e){toast("授权登录请求失败","err",e.message)}
+  busy(btn,false);
+}
+async function pollLoginAccount(before, deadline){
+  try{
+    const d=await api("/accounts");
+    const accs=d.accounts||[];
+    const fresh=accs.filter(a=>!before.has(a.auth_index));
+    if(fresh.length){
+      const who=fresh.map(a=>a.nickname||a.auth_index).join("、");
+      toast("检测到新账号","ok",who);
+      await load(true);
+      return;
+    }
+  }catch(_){}
+  if(Date.now()<deadline)setTimeout(()=>pollLoginAccount(before,deadline),5000);
 }
 /* ===== 模型禁用（v0.9.40）=====
    目录：GET /plugins/workbuddy/models/groups（插件按 realm 聚合 model_cache

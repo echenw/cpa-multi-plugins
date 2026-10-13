@@ -36,14 +36,6 @@ var (
 	loginPlatform   = "CLI"
 	loginPlatformMu sync.RWMutex
 
-	// loginRegion selects the upstream realm for NEW logins: "intl"
-	// (codebuddy.ai, IDE client; T24 default) or "cn" (copilot.tencent.com).
-	// Merged codebuddy-intl plugin v0.11.0. The login_region config stays as
-	// the sticky fallback (explicit key still wins, bare reconfigures keep
-	// the current value — see configure below).
-	loginRegion   = regionIntl
-	loginRegionMu sync.RWMutex
-
 	// usageReportURL / usageReportKey: POST NDJSON to CPA-Manager-Plus
 	// /v0/management/usage/import (only path that reaches request monitoring;
 	// c-shared plugins cannot use host usage.DefaultManager/redisqueue).
@@ -119,7 +111,6 @@ func configure(raw []byte) {
 	nextTasksAuto := true
 	nextMgmtKey := ""
 	nextLoginPlatform := ""    // sticky: empty = keep current (issue #24)
-	nextLoginRegion := ""      // sticky: empty = keep current (issue #24)
 	nextStreamHeadTimeout := 0 // default off: 0 seconds
 
 	// retry_on_4xx: per-request account-failover budget. Applied ONLY when
@@ -143,13 +134,6 @@ func configure(raw []byte) {
 			// line-scan below can never match. Block style parses
 			// identically in both paths.
 			if m, ok := decodePluginConfigYAML(req.ConfigYAML); ok {
-				if v, present := m["login_region"]; present {
-					if strings.EqualFold(configScalarString(v), "intl") {
-						nextLoginRegion = regionIntl
-					} else {
-						nextLoginRegion = regionCN
-					}
-				}
 				if v, present := m["login_platform"]; present {
 					if p := configScalarString(v); strings.EqualFold(p, "CLI") || strings.EqualFold(p, "ide") {
 						nextLoginPlatform = p
@@ -245,13 +229,6 @@ func configure(raw []byte) {
 						nextLoginPlatform = "ide"
 					}
 				}
-				if strings.HasPrefix(line, "login_region:") {
-					v := strings.TrimSpace(strings.TrimPrefix(line, "login_region:"))
-					v = strings.Trim(v, "\"'")
-					if strings.EqualFold(v, "intl") {
-						nextLoginRegion = regionIntl
-					}
-				}
 				if strings.HasPrefix(line, "token_keepalive:") {
 					v := strings.TrimSpace(strings.TrimPrefix(line, "token_keepalive:"))
 					v = strings.Trim(v, "\"'")
@@ -298,10 +275,9 @@ func configure(raw []byte) {
 	tasksAuto = nextTasksAuto
 	tasksAutoMu.Unlock()
 
-	// Sticky (issue #24): only an explicit key moves the pointer; bare or
-	// foreign reconfigures (auth-store churn) keep whatever was set.
-	// Applied values are logged once -- previously a churn reconfigure
-	// could silently reset the region back to cn with no trace.
+	// Sticky (issue #24): only an explicit login_platform key moves the
+	// pointer; bare or foreign reconfigures (auth-store churn) keep whatever
+	// was set.
 	if nextLoginPlatform != "" {
 		loginPlatformMu.Lock()
 		if loginPlatform != nextLoginPlatform {
@@ -309,15 +285,6 @@ func configure(raw []byte) {
 		}
 		loginPlatform = nextLoginPlatform
 		loginPlatformMu.Unlock()
-	}
-
-	if nextLoginRegion != "" {
-		loginRegionMu.Lock()
-		if loginRegion != nextLoginRegion {
-			log.Printf("workbuddy: login_region=%s applied (new logins target %s)", nextLoginRegion, strings.ToUpper(nextLoginRegion))
-		}
-		loginRegion = nextLoginRegion
-		loginRegionMu.Unlock()
 	}
 
 	lifecycleAutoMu.Lock()
@@ -450,13 +417,6 @@ func currentLoginPlatform() string {
 		return p
 	}
 	return "CLI"
-}
-
-// loadedLoginRegion returns the configured realm for NEW logins.
-func loadedLoginRegion() string {
-	loginRegionMu.RLock()
-	defer loginRegionMu.RUnlock()
-	return loginRegion
 }
 
 // loadedStreamHeadTimeout returns the configured async-stream head-gate wait in

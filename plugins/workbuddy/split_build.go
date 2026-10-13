@@ -16,10 +16,10 @@
 //
 //	  - providerName (var since the split flavor) → the registered plugin id,
 //	    auth-file namespace and panel entry.
-//	  - pluginVariantPin → the DEFAULT for the sticky login_region config;
-//	    an explicit login_region in config.yaml still wins. Per-account realm
-//	    routing (cn / global / intl) is untouched — the pin only defaults
-//	    NEW logins.
+//	  - pluginVariantPin → build-time realm pin, retained only so split
+//	    -ldflags injections still link; it no longer defaults NEW logins.
+//	    Per-account realm routing (cn / global / intl) is untouched, and NEW
+//	    logins resolve their realm from the request only (default intl).
 //
 // Empty values (the unified flavor default) keep behavior byte-for-byte.
 package main
@@ -37,17 +37,14 @@ func init() {
 	applyVariantPin()
 }
 
-// applyVariantPin seeds the sticky login-region default from the build-time
-// pin. Called from init() (before any host configure()) and directly from
-// tests. Explicit login_region config still overrides later.
+// applyVariantPin validates the build-time pin. Config-file region switching
+// is deleted, so the pin no longer seeds any login default: NEW logins
+// always resolve from the request (default intl). Called from init() and
+// directly from tests.
 func applyVariantPin() {
 	switch pluginVariantPin {
-	case "":
+	case "", "cn", "intl":
 		return
-	case "cn", "intl":
-		loginRegionMu.Lock()
-		loginRegion = pluginVariantPin
-		loginRegionMu.Unlock()
 	default:
 		panic("workbuddy: invalid pluginVariantPin " + pluginVariantPin)
 	}
