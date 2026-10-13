@@ -379,7 +379,8 @@ func wbRegistration() registration {
 				{Name: "lifecycle_auto", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Auto disable CN when credits exhausted; re-enable CN after check-in restores credits (default true)."},
 				{Name: "token_keepalive", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Enable daily access-token refresh at 22:00 local time to prevent Keycloak offline-session expiry (default true)."},
 				{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Description: "Optional model list. Each item can have id, name, alias, context, max_tokens, enabled, reasoning."},
-				{Name: "scheduler_mode", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{schedulerModeOff, schedulerModeCredits}, Description: "Multi-account selection: off (defer to built-in, default) or credits (pick highest remaining). WARNING: when off + lifecycle_auto=false, exhausted accounts may still be routed — enable lifecycle_auto or set scheduler_mode=credits."},
+				{Name: "scheduler_mode", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{schedulerModeOff, schedulerModeCredits, schedulerModeSession}, Description: "Multi-account selection: off (defer to built-in, default), credits (panel-selected account) or session (per-conversation sticky routing, same key stays on one account up to 1h). WARNING: when off + lifecycle_auto=false, exhausted accounts may still be routed — enable lifecycle_auto or set scheduler_mode=credits."},
+				{Name: "retry_on_4xx", Type: pluginapi.ConfigFieldTypeInteger, Description: "Per-request account-failover budget on account-level 4xx (401/403/404/405) and 429: retry the same request on the next account up to N times (default 10, clamp 0-10, 0 disables rotation)."},
 				{Name: "usage_report_url", Type: pluginapi.ConfigFieldTypeString, Description: "Optional override of CPAMP usage import URL (default http://cpa-manager-plus:18317/v0/management/usage/import; also env USAGE_REPORT_URL)."},
 				{Name: "usage_report_key", Type: pluginapi.ConfigFieldTypeString, Description: "Optional CPAMP admin key override. Prefer auto-detect from env CPAMP_ADMIN_KEY / USAGE_REPORT_KEY or secret file /run/secrets/cpamp_admin_key."},
 			},
@@ -747,6 +748,74 @@ func toAuthDataOptsWithNote(sa *storedAuth, cr *creditsSummary, disabled bool, p
 
 // -----------------------------------------------------------------------------
 
+// execFailure is one failed upstream attempt on the non-stream path. Exactly
+// one of transportErr / aggErr is set, or neither (plain >=400 with status +
+// body). The loop rotates only on account-level failures; the final failure
+// is accounted exactly like the historical single-shot path.
+type execFailure struct {
+	status       int
+	body         string
+	transportErr error
+	aggErr       error
+}
+
+// execExecuteAttemptQoder performs exactly one synchronous upstream call
+// against sa: fresh COSY-signed request for the shared encoded body, then
+// fold SSE → completion. No accounting happens here — the caller
+// (handleExecExecute) owns publishUsage / cooldown / reconcile so
+// intermediate rotated attempts stay silent and the final outcome is
+// recorded once, against the account that produced it.
+func execExecuteAttemptQoder(encodedBody string, sa *storedAuth, upstreamModel, reqModel string) ([]byte, *execFailure) {
+	httpReq, err := http.NewRequest(http.MethodPost, endpointChatFor(sa), strings.NewReader(encodedBody))
+	if err != nil {
+		return nil, &execFailure{transportErr: err}
+	}
+	if err := applyCosyHeaders(httpReq, sa, encodedBody, endpointChatFor(sa), upstreamModel, true); err != nil {
+		return nil, &execFailure{transportErr: fmt.Errorf("cosy: %w", err)}
+	}
+	// Compliance: route via host.http.do_stream so request-log captures the
+	// outbound call. Read entire body via the bridge, then fold SSE → completion.
+	stream, statusCode, _, err := hostHTTPDoStream(httpReq)
+	if err != nil {
+		return nil, &execFailure{transportErr: fmt.Errorf("http_error: %w", err)}
+	}
+	defer stream.Close()
+	reader := newHostStreamReader(stream)
+	if statusCode >= 400 {
+		payload, _ := io.ReadAll(reader)
+		return nil, &execFailure{status: statusCode, body: string(payload)}
+	}
+	completion, err := aggregateQoderSSE(reader, reqModel)
+	if err != nil {
+		return nil, &execFailure{status: http.StatusOK, body: err.Error(), aggErr: err}
+	}
+	return completion, nil
+}
+
+// finishExecuteFailureQoder records the final failure of handleExecExecute.
+// The three branches are the historical single-shot accounting, unchanged:
+// transport errors only publish usage; in-stream aggregate errors also feed
+// the pair cooldown; >=400 additionally feeds the lifecycle reconcile, and
+// returns the status-wrapped translator error so the host cools this
+// credential.
+func finishExecuteFailureQoder(reqModel, upstreamModel, cooldownModel, authUID, usedAuthID string, sa *storedAuth, started time.Time, fail *execFailure) error {
+	if fail.transportErr != nil {
+		publishUsage(reqModel, upstreamModel, authUID, started, usage.Detail{}, true, 0, fail.transportErr.Error())
+		return fail.transportErr
+	}
+	if fail.aggErr != nil {
+		publishUsage(reqModel, upstreamModel, authUID, started, usage.Detail{}, true, 0, fail.aggErr.Error())
+		recordUpstreamFailure(usedAuthID, cooldownModel, 0, fail.aggErr.Error())
+		return fail.aggErr
+	}
+	publishUsage(reqModel, upstreamModel, authUID, started, usage.Detail{}, true, fail.status, fail.body)
+	recordUpstreamFailure(usedAuthID, cooldownModel, fail.status, fail.body)
+	reconcileAfterExecutorError(usedAuthID, fail.status, fail.body)
+	// 0.8.13: account-level statuses ride the error envelope so the host
+	// cooldown layer stops re-picking a drained credential.
+	return upstreamStatusError(fail.status, chatUpstreamError(fail.status, fail.body))
+}
+
 func handleExecExecute(raw []byte) ([]byte, error) {
 	var req pluginapi.ExecutorRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
@@ -779,41 +848,41 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 		return nil, fmt.Errorf("body build: %w", err)
 	}
 	encodedBody := qoderEncode(body)
-	httpReq, err := http.NewRequest(http.MethodPost, endpointChatFor(sa), strings.NewReader(encodedBody))
-	if err != nil {
-		return nil, err
+	// Per-request account-failover loop (T18): try the prepared body against
+	// the configured account first; on an account-level 4xx (401/403/404/405)
+	// or 429 soft rate limit rebuild against the next candidate, up to
+	// retry_on_4xx times. Accounting runs once, against the credential that
+	// actually served (or finally failed) the request. 5xx/0/402 and business
+	// 400 never rotate — they keep the cross-request cooldown path.
+	budget := loadedRetryOn4xx()
+	curSA := sa
+	curAuthUID := authUID
+	usedAuthID := req.AuthID
+	for attempt := 0; ; attempt++ {
+		completion, fail := execExecuteAttemptQoder(encodedBody, curSA, upstreamModel, req.Model)
+		if fail == nil {
+			publishUsage(req.Model, upstreamModel, curAuthUID, started, usageDetailFromCompletion(completion), false, 0, "")
+			invalidateAccountCredits(usedAuthID, curAuthUID)
+			return okEnvelope(pluginapi.ExecutorResponse{Payload: completion})
+		}
+		if !shouldRotateOnUpstreamErr(fail.status, fail.body) || attempt >= budget {
+			return nil, finishExecuteFailureQoder(req.Model, upstreamModel, cooldownModel, curAuthUID, usedAuthID, curSA, started, fail)
+		}
+		failedID := usedAuthID
+		if failedID == "" && curSA != nil {
+			failedID = curSA.Account.UID
+		}
+		// The failing account's session bindings are released so follow-up
+		// requests in those conversations re-assign elsewhere.
+		evictSessionBindingsForAuth(failedID)
+		nextID, nextSA, hasNext := pickNextAuthFn(failedID, upstreamModel)
+		if !hasNext || nextSA == nil {
+			return nil, finishExecuteFailureQoder(req.Model, upstreamModel, cooldownModel, curAuthUID, usedAuthID, curSA, started, fail)
+		}
+		curSA = nextSA
+		usedAuthID = nextID
+		curAuthUID = nextSA.Account.UID
 	}
-	if err := applyCosyHeaders(httpReq, sa, encodedBody, endpointChatFor(sa), upstreamModel, true); err != nil {
-		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, "cosy: "+err.Error())
-		return nil, fmt.Errorf("cosy: %w", err)
-	}
-	// Compliance: route via host.http.do_stream so request-log captures the
-	// outbound call. Read entire body via the bridge, then fold SSE → completion.
-	stream, statusCode, _, err := hostHTTPDoStream(httpReq)
-	if err != nil {
-		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
-		return nil, fmt.Errorf("http_error: %w", err)
-	}
-	defer stream.Close()
-	reader := newHostStreamReader(stream)
-	if statusCode >= 400 {
-		payload, _ := io.ReadAll(reader)
-		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, string(payload))
-		recordUpstreamFailure(req.AuthID, cooldownModel, statusCode, string(payload))
-		reconcileAfterExecutorError(req.AuthID, statusCode, string(payload))
-		// 0.8.13: account-level statuses ride the error envelope so the host
-		// cooldown layer stops re-picking a drained credential.
-		return nil, upstreamStatusError(statusCode, chatUpstreamError(statusCode, string(payload)))
-	}
-	completion, err := aggregateQoderSSE(reader, req.Model)
-	if err != nil {
-		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
-		recordUpstreamFailure(req.AuthID, cooldownModel, 0, err.Error())
-		return nil, err
-	}
-	publishUsage(req.Model, upstreamModel, authUID, started, usageDetailFromCompletion(completion), false, 0, "")
-	invalidateAccountCredits(req.AuthID, authUID)
-	return okEnvelope(pluginapi.ExecutorResponse{Payload: completion})
 }
 
 // stripProviderPrefix removes the leading "qoder/" (or any "<provider>/")
@@ -873,7 +942,7 @@ func handleExecStream(raw []byte) ([]byte, error) {
 	// No async stream id → fall back to synchronous chunk collection.
 	if req.StreamID == "" {
 		collector := &sseUsageCollector{}
-		chunks, statusCode, errCollect := collectUpstreamStreamQoder(encodedBody, sa, upstreamModel, sseFramed, collector)
+		chunks, statusCode, errCollect := collectUpstreamStreamQoder(encodedBody, sa, upstreamModel, sseFramed, collector, req.AuthID)
 		if errCollect != nil {
 			publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, errCollect.Error())
 			recordUpstreamFailure(req.AuthID, cooldownModel, statusCode, errCollect.Error())

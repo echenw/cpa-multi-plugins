@@ -493,8 +493,59 @@ func pumpUpstreamStream(httpReq *http.Request, cancel context.CancelFunc, stream
 // collectUpstreamStreamQoder is the QoderWork-flavoured synchronous fallback
 // (no async stream id): drain the upstream nested SSE, unwrap the inner
 // OpenAI chunks, return them as a slice. The collector, when non-nil,
-// observes the unwrapped inner chunks for usage extraction.
-func collectUpstreamStreamQoder(encodedBody string, sa *storedAuth, modelKey string, sseFramed bool, collector *sseUsageCollector) ([]pluginapi.ExecutorStreamChunk, int, error) {
+// observes the unwrapped inner chunks for usage extraction. authID is the
+// scheduler-level account id used for rotation bookkeeping (session evict +
+// next-account lookup); "" falls back to the UID carried by sa.
+//
+// Per-request account-failover loop (T18): on an account-level 4xx
+// (401/403/404/405) or 429 the same encoded body is retried against the next
+// candidate, up to retry_on_4xx times. Business 400, 5xx/0/402 and
+// in-stream failures without account-level markers return immediately —
+// the caller owns all accounting, so intermediate rotated attempts stay
+// silent and only the final outcome is recorded.
+func collectUpstreamStreamQoder(encodedBody string, sa *storedAuth, modelKey string, sseFramed bool, collector *sseUsageCollector, authID string) ([]pluginapi.ExecutorStreamChunk, int, error) {
+	budget := loadedRetryOn4xx()
+	curSA := sa
+	curAuthID := authID
+	var lastStatus int
+	var lastErr error
+	for attempt := 0; attempt <= budget; attempt++ {
+		chunks, statusCode, errOnce := collectUpstreamStreamQoderOnce(encodedBody, curSA, modelKey, sseFramed, collector)
+		if errOnce == nil {
+			return chunks, statusCode, nil
+		}
+		lastStatus = statusCode
+		lastErr = errOnce
+		if !shouldRotateOnUpstreamErr(statusCode, errOnce.Error()) {
+			return chunks, statusCode, errOnce
+		}
+		if attempt >= budget {
+			return chunks, statusCode, errOnce
+		}
+		currentID := curAuthID
+		if currentID == "" && curSA != nil {
+			currentID = strings.TrimSpace(curSA.Account.UID)
+		}
+		if currentID == "" {
+			return chunks, statusCode, errOnce
+		}
+		evictSessionBindingsForAuth(currentID)
+		nextID, nextSA, hasNext := pickNextAuthFn(currentID, modelKey)
+		if !hasNext || nextSA == nil {
+			return chunks, statusCode, errOnce
+		}
+		curSA = nextSA
+		curAuthID = nextID
+	}
+	return nil, lastStatus, lastErr
+}
+
+// collectUpstreamStreamQoderOnce performs exactly one synchronous upstream
+// call against sa: build the COSY-signed request, route via
+// host.http.do_stream, decide success vs 4xx/5xx. Pulled out of
+// collectUpstreamStreamQoder so the retry loop can run the same encoded body
+// against a different account on failure.
+func collectUpstreamStreamQoderOnce(encodedBody string, sa *storedAuth, modelKey string, sseFramed bool, collector *sseUsageCollector) ([]pluginapi.ExecutorStreamChunk, int, error) {
 	httpReq, err := http.NewRequest(http.MethodPost, endpointChatFor(sa), strings.NewReader(encodedBody))
 	if err != nil {
 		return nil, 0, err

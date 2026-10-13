@@ -118,6 +118,11 @@ func endpointUserInfoForRegion(region string) string {
 // (checkin.go claimProViaCampaigns, campaign.go claimCampaignByID).
 
 func endpointChatFor(sa *storedAuth) string {
+	// Test seam: hermetic tests point every account at an httptest server
+	// (see setQoderChatBase). Production never sets it.
+	if qoderChatBaseOverride != "" {
+		return qoderChatBaseOverride
+	}
 	return gatewayBaseFor(sa) + "/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1"
 }
 
