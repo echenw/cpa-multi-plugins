@@ -1,3 +1,8 @@
+# cpa-plugin-suite: adapted from mmqz/cpa-multi-plugins (MIT) for own repo.
+# GATE: 自有远端启用并获用户授权前不推送、不发布 — do NOT push, create a
+# remote, or publish any release artifact before the own-remote is configured
+# AND the user has explicitly authorized it. This workflow is present for
+# publish-ready shape only (本版不推送、不运行).
 name: Build & Release Plugins
 
 on:
@@ -105,7 +110,7 @@ jobs:
           which gcc 2>&1 || echo "which gcc failed"
           gcc --version 2>&1 | head -1 || echo "gcc invocation failed"
           mkdir -p dist/${{ matrix.os }}-${{ matrix.arch }}
-          PLUGINS="workbuddy qoder trae zcode mimo"
+          PLUGINS="workbuddy qoder trae zcode mimo token-usage-tracker"
           for plugin in $PLUGINS; do
             echo "=== Building $plugin ==="
             cd plugins/$plugin
@@ -134,7 +139,7 @@ jobs:
           CC: ${{ matrix.cc }}
         run: |
           mkdir -p dist/${{ matrix.os }}-${{ matrix.arch }}
-          PLUGINS="workbuddy qoder trae zcode mimo"
+          PLUGINS="workbuddy qoder trae zcode mimo token-usage-tracker"
           for plugin in $PLUGINS; do
             echo "=== Building $plugin ==="
             cd plugins/$plugin
@@ -159,7 +164,7 @@ jobs:
       #   -X main.providerName=<id>      → registered plugin id / auth-file
       #                                    namespace / panel entry
       #   -X main.pluginVariantPin=<pin> → default login_region/login_variant
-      # One zip per platform: cpa-multi-plugins-split-<os>-<arch>.zip.
+      # One zip per platform: cpa-plugin-suite-split-<os>-<arch>.zip.
       - name: Build split-channel plugins (Windows)
         if: matrix.os == 'windows'
         env:
@@ -225,38 +230,41 @@ jobs:
         shell: powershell
         run: |
           Get-ChildItem dist/${{ matrix.os }}-${{ matrix.arch }} -Filter *.dll | ForEach-Object { Write-Host "  $($_.Name)" }
-          Compress-Archive -Path "dist/${{ matrix.os }}-${{ matrix.arch }}/*.dll" -DestinationPath "cpa-multi-plugins-${{ matrix.os }}-${{ matrix.arch }}.zip" -Force
+          Compress-Archive -Path "dist/${{ matrix.os }}-${{ matrix.arch }}/*.dll" -DestinationPath "cpa-plugin-suite-${{ matrix.os }}-${{ matrix.arch }}.zip" -Force
           Get-ChildItem dist-split/${{ matrix.os }}-${{ matrix.arch }} -Filter *.dll | ForEach-Object { Write-Host "  split: $($_.Name)" }
-          Compress-Archive -Path "dist-split/${{ matrix.os }}-${{ matrix.arch }}/*.dll" -DestinationPath "cpa-multi-plugins-split-${{ matrix.os }}-${{ matrix.arch }}.zip" -Force
+          Compress-Archive -Path "dist-split/${{ matrix.os }}-${{ matrix.arch }}/*.dll" -DestinationPath "cpa-plugin-suite-split-${{ matrix.os }}-${{ matrix.arch }}.zip" -Force
           Write-Host "Created zips:"
-          Get-Item "cpa-multi-plugins*${{ matrix.os }}-${{ matrix.arch }}.zip" | Select-Object Name, Length
+          Get-Item "cpa-plugin-suite*${{ matrix.os }}-${{ matrix.arch }}.zip" | Select-Object Name, Length
 
       - name: Package artifacts (non-Windows)
         if: matrix.os != 'windows'
         run: |
           cd dist/${{ matrix.os }}-${{ matrix.arch }}
           rm -f *.h
-          zip -r ../../cpa-multi-plugins-${{ matrix.os }}-${{ matrix.arch }}.zip .
+          zip -r ../../cpa-plugin-suite-${{ matrix.os }}-${{ matrix.arch }}.zip .
           cd ../../dist-split/${{ matrix.os }}-${{ matrix.arch }}
           rm -f *.h
-          zip -r ../../cpa-multi-plugins-split-${{ matrix.os }}-${{ matrix.arch }}.zip .
+          zip -r ../../cpa-plugin-suite-split-${{ matrix.os }}-${{ matrix.arch }}.zip .
           cd ../..
-          ls -lh cpa-multi-plugins*.zip
+          ls -lh cpa-plugin-suite*.zip
         shell: bash
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: cpa-multi-plugins-${{ matrix.os }}-${{ matrix.arch }}
+          name: cpa-plugin-suite-${{ matrix.os }}-${{ matrix.arch }}
           path: |
-            cpa-multi-plugins-${{ matrix.os }}-${{ matrix.arch }}.zip
-            cpa-multi-plugins-split-${{ matrix.os }}-${{ matrix.arch }}.zip
+            cpa-plugin-suite-${{ matrix.os }}-${{ matrix.arch }}.zip
+            cpa-plugin-suite-split-${{ matrix.os }}-${{ matrix.arch }}.zip
           retention-days: 30
 
   release:
     name: Create Release
     needs: build
     runs-on: ubuntu-latest
+    # GATE (cpa-plugin-suite): 自有远端启用并获用户授权前不推送、不发布.
+    # Tag/dispatch gating below is kept as-is; this job must NOT run/publish
+    # until the own-remote exists AND the user has explicitly authorized it.
     # Deep-audit hardening: publish only when the build job itself succeeded.
     # The optional darwin-amd64 cross leg keeps reporting success via
     # continue-on-error, so a toolchain regression there still cannot block a
@@ -295,23 +303,23 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.version }}
-          name: cpa-multi-plugins ${{ steps.version.outputs.version }}
+          name: cpa-plugin-suite ${{ steps.version.outputs.version }}
           body: |
-            # cpa-multi-plugins ${{ steps.version.outputs.version }}
+            # cpa-plugin-suite ${{ steps.version.outputs.version }}
 
-            5 unified CPA plugins: **CodeBuddy/WorkBuddy**, **Qoder**, **Trae**, **ZCode (GLM coding plan)**, **MiMo** — the first three merge the former CN/Intl/solo variants with automatic legacy auth-file adoption.
+            6 unified CPA plugins: **CodeBuddy/WorkBuddy**, **Qoder**, **Trae**, **ZCode (GLM coding plan)**, **MiMo**, **token-usage-tracker (usage dashboard)** — the first three merge the former CN/Intl/solo variants with automatic legacy auth-file adoption.
 
             ## Downloads
 
             ### Unified package (default, recommended)
-            - `cpa-multi-plugins-linux-amd64.zip` — Linux x86_64
-            - `cpa-multi-plugins-linux-arm64.zip` — Linux ARM64
-            - `cpa-multi-plugins-darwin-arm64.zip` — macOS Apple Silicon
-            - `cpa-multi-plugins-darwin-amd64.zip` — macOS Intel (cross-built on an arm64 runner)
-            - `cpa-multi-plugins-windows-amd64.zip` — Windows x86_64
+            - `cpa-plugin-suite-linux-amd64.zip` — Linux x86_64
+            - `cpa-plugin-suite-linux-arm64.zip` — Linux ARM64
+            - `cpa-plugin-suite-darwin-arm64.zip` — macOS Apple Silicon
+            - `cpa-plugin-suite-darwin-amd64.zip` — macOS Intel (cross-built on an arm64 runner)
+            - `cpa-plugin-suite-windows-amd64.zip` — Windows x86_64
 
             ### Split-channel package (issue #29)
-            Same platform list with a `cpa-multi-plugins-split-<os>-<arch>.zip` each. Contains the legacy **per-variant plugins** — `codebuddy-cn`, `codebuddy-intl`, `qoder-cn`, `qoder-intl`, `trae-cn`, `trae-solo-cn`, `trae-intl` — each with its own panel entry and its own OAuth login pinned to its realm. Install INSTEAD of (not next to) the unified plugin of the same provider; enable them in config.yaml by their own ids (`plugins.configs.codebuddy-intl.enabled: true`, …).
+            Same platform list with a `cpa-plugin-suite-split-<os>-<arch>.zip` each. Contains the legacy **per-variant plugins** — `codebuddy-cn`, `codebuddy-intl`, `qoder-cn`, `qoder-intl`, `trae-cn`, `trae-solo-cn`, `trae-intl` — each with its own panel entry and its own OAuth login pinned to its realm. Install INSTEAD of (not next to) the unified plugin of the same provider; enable them in config.yaml by their own ids (`plugins.configs.codebuddy-intl.enabled: true`, …).
 
             ## Installation (verified against real CLIProxyAPI host)
             1. Download and unzip the archive for your platform.
@@ -322,13 +330,14 @@ jobs:
                  enabled: true
                  dir: "plugins"
                  configs:
-                   workbuddy: { enabled: true }
-                   qoder: { enabled: true }
-                   trae: { enabled: true }
-                   zcode: { enabled: true }
-                   mimo: { enabled: true }
-               ```
-            4. Restart CPA and check logs for `pluginhost: plugin registered plugin_id=workbuddy/qoder/trae/zcode/mimo`.
+                    workbuddy: { enabled: true }
+                    qoder: { enabled: true }
+                    trae: { enabled: true }
+                    zcode: { enabled: true }
+                    mimo: { enabled: true }
+                    token-usage-tracker: { enabled: true }
+                ```
+             4. Restart CPA and check logs for `pluginhost: plugin registered plugin_id=workbuddy/qoder/trae/zcode/mimo/token-usage-tracker`.
             5. Login accounts via the management panel or Management API. Legacy `codebuddy-cn-/codebuddy-intl-/qoder-cn-/qoder-intl-/trae-cn-/trae-solo-cn-/trae-intl-` auth files are adopted automatically; zcode adopts a legacy single-file `zcode.json`; mimo adopts the desktop's SSO session automatically (Chromium partition cookie jar → service-ticket re-mint).
 
             ## Plugins
@@ -339,6 +348,7 @@ jobs:
             | trae | Trae CN + Trae SOLO CN + Trae Intl | CN (api.trae.cn) / SOLO / Intl (marscode) | Per-variant device flow |
             | zcode | GLM coding plan (ZCode desktop parity) | Intl (api.z.ai) / CN (open.bigmodel.cn) | OAuth CLI poll flow + legacy zcode.json adoption, per-account provider |
             | mimo | Xiaomi MiMo (mimocode CLI + desktop parity) | CN / SGP / RU / IN (mimo-server-<region>.xiaomimimo.com) | sk OAuth (permanent) + desktop SSO cookie adoption, per-account region |
+            | token-usage-tracker | Token usage dashboard (feed import + query + panel) | n/a (reads local feed) | Reads `<CPA root>/data/token-usage-feed.ndjson`, no login |
 
             See [README](https://github.com/mmqz/cpa-multi-plugins#readme) for details.
           files: release/*.zip
