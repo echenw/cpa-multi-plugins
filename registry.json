@@ -90,7 +90,7 @@
     {
       "id": "token-usage-tracker",
       "name": "Token Usage Tracker",
-      "description": "Token usage dashboard plugin (port of the R1 token-usage-tracker): per-model/account stats, request details and costs from the shared NDJSON usage feed. Placeholder entry: source tree not yet ported into plugins/token-usage-tracker; recheck after T15 before any release.",
+      "description": "Token usage dashboard plugin (port of the R1 token-usage-tracker): per-model/account stats, request details and costs from the shared NDJSON usage feed. Placeholder entry: ported at plugins/token-usage-tracker/; license still unconfirmed, recheck before any release.",
       "author": "REPLACE_ME",
       "version": "0.1.0",
       "repository": "REPLACE_ME",
