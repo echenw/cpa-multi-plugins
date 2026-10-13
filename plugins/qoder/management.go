@@ -130,7 +130,9 @@ func managementRegistration() managementRegistrationResponse {
 			{Method: http.MethodGet, Path: base + "/cooldowns", Description: "List active per-(account, model) cooldown entries."},
 			{Method: http.MethodPost, Path: base + "/cooldowns/clear", Description: "Clear cooldown for one account (auth_id) or one pair (auth_id + model)."},
 			{Method: http.MethodGet, Path: base + "/models/groups", Description: "Per-region model catalog (model_cache snapshots; ?refresh=1 re-discovers) for the panel's exclusion picker."},
-			{Method: http.MethodPost, Path: base + "/login/start", Description: "Start a device-authorization login for the panel authorize button (body: {region: cn|intl, default intl}). Returns {auth_url, region}; open the URL, then the new account appears in the accounts view."},
+			{Method: http.MethodPost, Path: base + "/login/start", Description: "Start a device-authorization login for the panel OAuth modal (body: {region: cn|intl, default intl}). Returns {auth_url, region, state, expires_at}; the modal keeps state and polls login/poll."},
+			{Method: http.MethodPost, Path: base + "/login/poll", Description: "Poll one device-authorization login (body: {state}). Returns {status: pending|success|expired|error, ...}; success persists the auth file."},
+			{Method: http.MethodPost, Path: base + "/login/callback", Description: "Submit the browser callback URL for one login (body: {state, callback_url}). A pasted pt- PAT takes the legacy exchange path; otherwise one device-poll attempt."},
 		},
 		Resources: []resourceRoute{
 			{Path: "/panel", Menu: "Qoder", Description: "Qoder dashboard (CN + Intl): credits, check-in, plan, import."},
@@ -201,6 +203,12 @@ func handleManagement(raw []byte) ([]byte, error) {
 		return okEnvelope(mgmtJSONResponse(status, payload))
 	case req.Method == http.MethodPost && path == base+"/login/start":
 		status, payload := handlePanelLoginStart(req)
+		return okEnvelope(mgmtJSONResponse(status, payload))
+	case req.Method == http.MethodPost && path == base+"/login/poll":
+		status, payload := handlePanelLoginPoll(req)
+		return okEnvelope(mgmtJSONResponse(status, payload))
+	case req.Method == http.MethodPost && path == base+"/login/callback":
+		status, payload := handlePanelLoginCallback(req)
 		return okEnvelope(mgmtJSONResponse(status, payload))
 	}
 	return okEnvelope(mgmtJSONResponse(http.StatusNotFound, map[string]any{"error": "not found: " + path}))

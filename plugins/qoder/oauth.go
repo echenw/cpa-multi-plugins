@@ -388,13 +388,32 @@ func startLoginWithRegion(raw []byte, region string) ([]byte, error) {
 	})
 }
 
+// persistPanelLoginAuth persists a freshly-authorized panel login through
+// the same funnel as the panel PAT import (buildAuthFileJSON +
+// hostAuthSaveJSONFn). It is the single persistence helper for all
+// panel-side login completions (device poll success + callback PAT legacy);
+// callers must not duplicate host.auth.save logic.
+func persistPanelLoginAuth(sa *storedAuth) (string, error) {
+	fileJSON, err := buildAuthFileJSON(sa, false, displayNote(sa, nil, false), nil)
+	if err != nil {
+		return "", err
+	}
+	name := authFileNameFor(sa)
+	if strings.TrimSpace(name) == "" {
+		name = authFileName
+	}
+	if err := hostAuthSaveJSONFn(name, fileJSON); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
 // handlePanelLoginStart serves POST <base>/login/start (management panel
 // "授权登录" button): the JSON body carries the same region keys as
 // auth.login_start (absent → intl default; any other value → 400 and nothing
 // is stored). It runs one startLoginWithRegion and returns {auth_url,
-// region} for the panel to open in a new tab; completion is observed the
-// same way as the panel-import path (a new auth file appears, then the
-// panel reloads its accounts view).
+// region, state, expires_at} for the panel OAuth modal; the modal keeps the
+// state and polls POST <base>/login/poll (5s) until success or expiry.
 func handlePanelLoginStart(req pluginapi.ManagementRequest) (int, map[string]any) {
 	region, present, err := parseLoginRegionField(req.Body)
 	if err != nil {
@@ -415,7 +434,147 @@ func handlePanelLoginStart(req pluginapi.ManagementRequest) (int, map[string]any
 	if err := json.Unmarshal(env.Result, &start); err != nil || start.URL == "" {
 		return http.StatusInternalServerError, map[string]any{"error": "login start decode failed"}
 	}
-	return http.StatusOK, map[string]any{"auth_url": start.URL, "region": region}
+	return http.StatusOK, map[string]any{
+		"auth_url":   start.URL,
+		"region":     region,
+		"state":      start.State,
+		"expires_at": start.ExpiresAt.UTC().Format(time.RFC3339),
+	}
+}
+
+// panelLoginPollSuccess persists a device-token grant and returns the
+// success payload shared by poll + callback. The state is deleted only
+// after the auth file lands.
+func panelLoginPollSuccess(state string, lc *loginCtx, tok *deviceTokenResponse) (int, map[string]any) {
+	sa := buildStoredAuthFromDeviceToken(tok, nil, lc.region)
+	name, err := persistPanelLoginAuth(sa)
+	if err != nil {
+		return http.StatusInternalServerError, map[string]any{"status": "error", "error": "persist auth: " + err.Error()}
+	}
+	loginStates.Delete(state)
+	return http.StatusOK, map[string]any{
+		"status":   "success",
+		"file":     name,
+		"uid":      sa.Account.UID,
+		"nickname": sa.Account.Nickname,
+		"region":   lc.region,
+	}
+}
+
+// handlePanelLoginPoll serves POST <base>/login/poll {state}: one
+// device-authorization poll via pollDeviceToken. Unknown state → error with
+// a restart hint; expired state is deleted and reported as expired.
+func handlePanelLoginPoll(req pluginapi.ManagementRequest) (int, map[string]any) {
+	var body struct {
+		State string `json:"state"`
+	}
+	_ = json.Unmarshal(req.Body, &body)
+	state := strings.TrimSpace(body.State)
+	if state == "" {
+		return http.StatusBadRequest, map[string]any{"status": "error", "error": "missing state (restart login)"}
+	}
+	v, ok := loginStates.Load(state)
+	if !ok {
+		return http.StatusNotFound, map[string]any{"status": "error", "error": "poll: unknown state (restart login)"}
+	}
+	lc := v.(*loginCtx)
+	if time.Now().After(lc.expires) {
+		loginStates.Delete(state)
+		return http.StatusGone, map[string]any{"status": "expired", "error": "poll: login expired (restart login)"}
+	}
+	if lc.region != regionCN && lc.region != regionIntl {
+		return http.StatusBadRequest, map[string]any{"status": "error", "error": fmt.Sprintf("invalid login region %q: want \"cn\" or \"intl\" (restart login)", lc.region)}
+	}
+	tok, pending, err := pollDeviceToken(lc.nonce, lc.verifier, lc.region)
+	if err != nil {
+		return http.StatusBadGateway, map[string]any{"status": "error", "error": "device authorization poll: " + err.Error()}
+	}
+	if !pending && tok != nil {
+		return panelLoginPollSuccess(state, lc, tok)
+	}
+	return http.StatusOK, map[string]any{"status": "pending", "message": "等待浏览器完成 Qoder 设备授权"}
+}
+
+// handlePanelLoginCallback serves POST <base>/login/callback
+// {state, callback_url}: a pasted pt- PAT takes the legacy PAT exchange
+// path (same as handlePollLogin Metadata pat); any other callback value
+// triggers exactly one immediate device-poll attempt and returns its
+// status. No code-exchange flow is invented — the callback URL is only the
+// user's completion signal. Invalid region → 400 with nothing stored;
+// unknown/expired state → error with a restart hint.
+func handlePanelLoginCallback(req pluginapi.ManagementRequest) (int, map[string]any) {
+	var body struct {
+		State       string `json:"state"`
+		CallbackURL string `json:"callback_url"`
+		Callback    string `json:"callback"`
+		CallbackUrl string `json:"callbackUrl"`
+		URL         string `json:"url"`
+		PAT         string `json:"pat"`
+	}
+	_ = json.Unmarshal(req.Body, &body)
+	state := strings.TrimSpace(body.State)
+	if state == "" {
+		return http.StatusBadRequest, map[string]any{"status": "error", "error": "missing state (restart login)"}
+	}
+	v, ok := loginStates.Load(state)
+	if !ok {
+		return http.StatusNotFound, map[string]any{"status": "error", "error": "poll: unknown state (restart login)"}
+	}
+	lc := v.(*loginCtx)
+	if time.Now().After(lc.expires) {
+		loginStates.Delete(state)
+		return http.StatusGone, map[string]any{"status": "expired", "error": "poll: login expired (restart login)"}
+	}
+	if lc.region != regionCN && lc.region != regionIntl {
+		return http.StatusBadRequest, map[string]any{"status": "error", "error": fmt.Sprintf("invalid login region %q: want \"cn\" or \"intl\" (restart login)", lc.region)}
+	}
+	cb := strings.TrimSpace(body.CallbackURL)
+	if cb == "" {
+		cb = strings.TrimSpace(body.Callback)
+	}
+	if cb == "" {
+		cb = strings.TrimSpace(body.CallbackUrl)
+	}
+	if cb == "" {
+		cb = strings.TrimSpace(body.URL)
+	}
+	if cb == "" {
+		cb = strings.TrimSpace(body.PAT)
+	}
+	if cb == "" {
+		return http.StatusBadRequest, map[string]any{"status": "error", "error": "missing callback_url"}
+	}
+	// Legacy path: user pasted a PAT into the modal (same exchange as
+	// handlePollLogin Metadata pat).
+	if strings.HasPrefix(cb, "pt-") {
+		tok, err := exchangePATForJobToken(cb, lc.region)
+		if err != nil {
+			return http.StatusBadGateway, map[string]any{"status": "error", "error": "PAT exchange failed: " + err.Error()}
+		}
+		ui, _ := fetchUserInfo(tok.Token, lc.region) // best-effort
+		sa := buildStoredAuthFromJobToken(cb, tok, ui, lc.region)
+		name, err := persistPanelLoginAuth(sa)
+		if err != nil {
+			return http.StatusInternalServerError, map[string]any{"status": "error", "error": "persist auth: " + err.Error()}
+		}
+		loginStates.Delete(state)
+		return http.StatusOK, map[string]any{
+			"status":   "success",
+			"file":     name,
+			"uid":      sa.Account.UID,
+			"nickname": sa.Account.Nickname,
+			"region":   lc.region,
+		}
+	}
+	// Otherwise: exactly one immediate device-poll attempt.
+	tok, pending, err := pollDeviceToken(lc.nonce, lc.verifier, lc.region)
+	if err != nil {
+		return http.StatusBadGateway, map[string]any{"status": "error", "error": "device authorization poll: " + err.Error()}
+	}
+	if !pending && tok != nil {
+		return panelLoginPollSuccess(state, lc, tok)
+	}
+	return http.StatusOK, map[string]any{"status": "pending", "message": "等待浏览器完成 Qoder 设备授权"}
 }
 
 // pollDeviceToken performs one GET against /api/v1/deviceToken/poll.
