@@ -1,6 +1,6 @@
 // usage_feed.go implements the shared NDJSON usage feed for the standalone
-// token-usage-tracker plugin. CANONICAL copy from plugins/workbuddy
-// (plan T10/T12): field spec, rotation semantics and threshold behavior are
+// token-usage-tracker plugin. COPY of the canonical implementation
+// (plan T10/T12, plugins/workbuddy/usage_feed.go): field spec, rotation semantics and threshold behavior are
 // identical; only provider/executor identity strings and comments are
 // trae-adapted. Divergences must land in the canonical file first, then sync
 // out.

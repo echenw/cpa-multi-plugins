@@ -5,12 +5,16 @@ Each entry names the plan task that introduced it.
 
 ## T14 — mimo usage feed (feed producer with usage callback enabled)
 
-- `plugins/mimo/usage_feed.go` is a byte-identical copy of the canonical
-  `plugins/workbuddy/usage_feed.go` (plan T10): no module/path adaptation was
-  needed (both `package main` on SDK `v7.2.30`; the shared `providerName`
-  const resolves to `mimo`). Canonical known gaps are inherited unchanged:
+- `plugins/mimo/usage_feed.go` is a copy of the canonical
+  `plugins/workbuddy/usage_feed.go` (plan T10) with module/path identity
+  adapted (`workbuddy` → `mimo` in header, comments, warn prefix; both
+  `package main` on SDK `v7.2.30`; the shared `providerName` const resolves
+  to `mimo`). Canonical known gaps are inherited unchanged:
   empty `session_key` on the host-callback path, `record.Source`
   pass-through.
+- Feed-label correction (post-T14 fix): the initial copy carried the
+  canonical `"executor_type": "workbuddy"` verbatim; it now writes
+  `"executor_type": "mimo"` (asserted by the append-one-line feed test).
 - Adaptation (the reason this task is marked「含适配差异」): mimo shipped
   with `UsagePlugin=false` and no `MethodUsageHandle` dispatch, unlike
   qoder/zcode/trae. `plugins/mimo/main.go` now advertises

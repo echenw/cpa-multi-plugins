@@ -1,17 +1,19 @@
 // usage_feed.go implements the shared NDJSON usage feed for the standalone
-// token-usage-tracker plugin. CANONICAL implementation (plan T10): all other
-// plugins copy this file; divergences must land here first, then sync out.
+// token-usage-tracker plugin. COPY of the canonical implementation
+// (plan T10, plugins/workbuddy/usage_feed.go); divergences must land in the
+// canonical file first, then sync out. Only module/path identity adapted
+// (workbuddy -> mimo).
 //
-// Why a file feed instead of merging the tracker into workbuddy or sharing
+// Why a file feed instead of merging the tracker into mimo or sharing
 // a bbolt database:
 //   - The host's UsagePlugin broadcast never fires for plugin executors, so a
-//     pure UsagePlugin consumer cannot observe workbuddy requests.
+//     pure UsagePlugin consumer cannot observe mimo requests.
 //   - bbolt holds an exclusive flock for the lifetime of a writer, so two
-//     long-lived processes (workbuddy recording + tracker dashboard) cannot
+//     long-lived processes (mimo recording + tracker dashboard) cannot
 //     share one DB file.
 //
 // The feed is a simple append-only NDJSON file at a well-known path
-// (<CPA root>/data/token-usage-feed.ndjson by default). workbuddy is the only
+// (<CPA root>/data/token-usage-feed.ndjson by default). mimo is the only
 // producer (O_APPEND, one line per completed request, opened and closed per
 // line so rotation is safe); token-usage-tracker is the only consumer (tracks
 // its read offset, imports into its own bbolt store). No locks, no
@@ -45,7 +47,7 @@
 //     tokens (Detail), stream/TTFT (record.TTFT), reasoning_effort
 //     (record.ReasoningEffort), failed + status_code (record.Failed /
 //     record.Failure).
-//   - KNOWN-GAP source: the workbuddy-internal account label
+//   - KNOWN-GAP source: the mimo-internal account label
 //     (sa.Account.Nickname preferred, authUID fallback) is only known on
 //     the executor publishUsage path; handleUsage receives no nickname, so
 //     it passes record.Source through (usually empty). Recorded as gap,
@@ -185,7 +187,7 @@ func cliProxyRootFromDir(dir string) (string, bool) {
 // data. reasoningEffort is the reasoning_effort actually sent upstream (post
 // forceMaxThinking rewrite); ttftNS is the time-to-first-token in nanoseconds
 // (0 when not observable, e.g. non-SSE paths or transport failures).
-// accountLabel is the workbuddy-internal account identifier (sa.Account.Nickname
+// accountLabel is the mimo-internal account identifier (sa.Account.Nickname
 // preferred, authUID fallback) and is written into the record's `source`
 // field so the tracker dashboard's 来源 (source) column shows which account
 // served each request. sessionKey is the same per-conversation key
@@ -229,7 +231,7 @@ func recordUsageFeed(alias, model, authUID string, started time.Time, detail usa
 		"alias":            alias,
 		"endpoint":         "POST /v1/chat/completions",
 		"auth_type":        "oauth",
-		"executor_type":    "workbuddy",
+		"executor_type":    "mimo",
 		"failed":           failed,
 		"status_code":      statusCode,
 		"session_key":      sessionKey,
@@ -288,5 +290,5 @@ func appendUsageFeedLine(path string, line []byte) {
 }
 
 func usageFeedWarnf(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "[workbuddy] usage feed: "+format+"\n", args...)
+	fmt.Fprintf(os.Stderr, "[mimo] usage feed: "+format+"\n", args...)
 }

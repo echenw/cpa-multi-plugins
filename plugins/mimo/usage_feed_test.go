@@ -107,6 +107,7 @@ func TestHandleUsageAppendsOneFeedLine(t *testing.T) {
 		Provider        string `json:"provider"`
 		Model           string `json:"model"`
 		Alias           string `json:"alias"`
+		ExecutorType    string `json:"executor_type"`
 		Failed          bool   `json:"failed"`
 		StatusCode      int    `json:"status_code"`
 		SessionKey      string `json:"session_key"`
@@ -127,6 +128,9 @@ func TestHandleUsageAppendsOneFeedLine(t *testing.T) {
 	}
 	if got.Provider != providerName {
 		t.Fatalf("provider = %q, want %q", got.Provider, providerName)
+	}
+	if got.ExecutorType != "mimo" {
+		t.Fatalf("executor_type = %q, want mimo", got.ExecutorType)
 	}
 	if got.Model != "mimo-pro" || got.Alias != "alias-m" {
 		t.Fatalf("model/alias = %q/%q", got.Model, got.Alias)
