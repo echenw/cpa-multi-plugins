@@ -4,6 +4,7 @@
 # 默认: 当前平台
 
 set -e
+set -o pipefail
 
 TARGET_OS=${1:-$(go env GOOS)}
 TARGET_ARCH=${2:-$(go env GOARCH)}
