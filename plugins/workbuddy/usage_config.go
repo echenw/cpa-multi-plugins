@@ -317,6 +317,12 @@ func configure(raw []byte) {
 	managementAPIKeyMu.Unlock()
 
 	resolveUsageReport(cfgURL, cfgKey)
+	// Shared usage feed for the standalone token-usage-tracker plugin
+	// (canonical T10: configure/record/append, O_APPEND, default
+	// <CPA root>/data/token-usage-feed.ndjson, rotation via
+	// maxUsageFeedBytes). Non-fatal by design: a failure only disables
+	// the feed, never chat.
+	configureUsageFeed(raw)
 	ensureScheduler()
 	// Migrate legacy codebuddy-cn auth files (merged plugin, v0.9.0).
 	startAdoption()
