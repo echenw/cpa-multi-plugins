@@ -235,9 +235,9 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
       <button type="button" class="modal-x" onclick="closeImportModal()" aria-label="关闭">×</button>
     </div>
     <div class="modal-bd">
-      <p class="hint">到 <a href="https://qoder.com.cn/settings/personal-access-tokens" target="_blank" rel="noopener">qoder.com.cn → 设置 → Personal Access Tokens</a> 创建一个 PAT（pt- 开头），粘贴到下方。插件会自动换取 jobToken 并保存为 <code>qoderwork-&lt;uid&gt;.json</code>。</p>
-      <input id="importPAT" type="password" placeholder="pt-xxxxxxxxxxxxxxxxxxxxxxxx" autocomplete="off" style="width:100%;padding:8px 10px;font-family:ui-monospace,monospace;font-size:13px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--fg);"/>
-      <p class="hint" style="margin-top:8px;opacity:0.7">PAT 长期有效（可在创建时设置过期时间）。插件存储 PAT 用于 jrt- 过期后自动续期，无需重新导入。</p>
+      <p class="hint">两种粘贴导入（单框单按钮，后端按内容自动识别）：① PAT — 到 <a href="https://qoder.com.cn/settings/personal-access-tokens" target="_blank" rel="noopener">qoder.com.cn → 设置 → Personal Access Tokens</a> 创建 PAT（pt- 开头），粘贴后自动换取 jobToken；② 第三方导出 JSON — 直接粘贴导出的 JSON（单个对象或数组），CN / Intl 按条目自动分区。保存为 <code>qoder-&lt;region&gt;-&lt;uid&gt;.json</code>。</p>
+      <textarea id="importPAT" placeholder="pt-xxxxxxxxxxxxxxxxxxxxxxxx&#10;或粘贴导出的 JSON（[{…}, {…}] 或 {…}）" autocomplete="off" style="width:100%;min-height:120px;padding:8px 10px;font-family:ui-monospace,monospace;font-size:12px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--fg);resize:vertical;"></textarea>
+      <p class="hint" style="margin-top:8px;opacity:0.7">PAT 长期有效（可在创建时设置过期时间）。插件存储 PAT 用于 jrt- 过期后自动续期，无需重新导入。JSON 导入的 token 按原样保存，后续由保活/刷新接管新鲜度。</p>
     </div>
     <div class="modal-ft">
       <button type="button" class="sec" onclick="closeImportModal()">取消</button>
@@ -952,15 +952,48 @@ function onImportMaskClick(e){
   if(e.target===document.getElementById("importModal")) closeImportModal();
 }
 async function importAuth(btn){
-  const pat=(document.getElementById("importPAT").value||"").trim();
-  if(!pat){toast("请粘贴 PAT（pt- 开头）","warn");return}
-  if(!pat.startsWith("pt-")){toast("PAT 必须以 pt- 开头","warn");return}
+  const ta=document.getElementById("importPAT");
+  const raw=(ta.value||"").trim();
+  if(!raw){toast("请粘贴 PAT（pt- 开头）或导出的 JSON","warn");return}
+  // Single textarea, single button: sniff the trimmed body. [...] / {...}
+  // → JSON credential path (region carried per entry); pt- → PAT path.
+  let body,isJSON=false;
+  if(raw.startsWith("[")||raw.startsWith("{")){
+    try{JSON.parse(raw)}catch(e){toast("JSON 格式无效","warn",e.message||String(e));return}
+    if(!raw.startsWith("[")){
+      try{
+        const probe=JSON.parse(raw);
+        if(probe&&typeof probe==="object"&&typeof probe.pat==="string"){
+          body=JSON.stringify({pat:probe.pat,region:probe.region});
+          isJSON=false;
+        }else{body=raw;isJSON=true}
+      }catch(e){body=raw;isJSON=true}
+    }else{body=raw;isJSON=true}
+  }else{
+    if(!raw.startsWith("pt-")){toast("PAT 必须以 pt- 开头，或粘贴导出的 JSON","warn");return}
+    body=JSON.stringify({pat:raw});
+  }
   busy(btn,true);
   try{
-    const d=await api("/import",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({pat})});
-    if(d.success){
+    const d=await api("/import",{method:"POST",headers:{"Content-Type":"application/json"},body});
+    if(isJSON){
+      const res=d.results||[];
+      const ok=res.filter(r=>r.ok).length, fail=res.filter(r=>!r.ok).length;
+      const failDetail=res.filter(r=>!r.ok).map(r=>((r.uid||"?")+":"+(r.error||"err")).slice(0,120)).join("; ");
+      if(d.success){
+        toast("JSON 导入成功","ok",ok+" 个账号已保存");
+        ta.value="";
+        closeImportModal();
+        load(true);
+      }else if(ok>0){
+        toast("JSON 部分导入","warn",ok+" 成功 · "+fail+" 失败："+failDetail);
+        ta.value="";
+        closeImportModal();
+        load(true);
+      }else toast("JSON 导入失败","err",(res[0]&&res[0].error)||d.error||"unknown");
+    }else if(d.success){
       toast("导入成功","ok",(d.nickname||d.uid||"")+ " → "+(d.file||d.name||""));
-      document.getElementById("importPAT").value="";
+      ta.value="";
       closeImportModal();
       load(true);
     }else toast("导入失败","err",d.error||"unknown");

@@ -122,7 +122,7 @@ func managementRegistration() managementRegistrationResponse {
 			{Method: http.MethodPost, Path: base + "/checkin", Description: "Manually check in one account (auth_index) or all."},
 			{Method: http.MethodPost, Path: base + "/checkin/config", Description: "Toggle auto check-in (enabled: true/false)."},
 			{Method: http.MethodGet, Path: base + "/credits", Description: "Get real-time credits for one (auth_index query) or all accounts."},
-			{Method: http.MethodPost, Path: base + "/import", Description: "Import a QoderWork PAT (pt-...) by exchanging it for a jobToken pair and persisting."},
+			{Method: http.MethodPost, Path: base + "/import", Description: "Import credentials: paste a PAT (pt-..., optional {region: cn|intl, default intl}) or third-party exported JSON (object or array, CN/Intl auto-detected per entry) and persist as qoder-<region>-<uid>.json."},
 			{Method: http.MethodPost, Path: base + "/select", Description: "Select the active account card used for chat routing (body: {auth_index})."},
 			{Method: http.MethodPost, Path: base + "/keepalive", Description: "Manually refresh access tokens for all accounts (or one with auth_index)."},
 			{Method: http.MethodPost, Path: base + "/claim-pro", Description: "Claim one-time Pro upgrade pack for one account (auth_index)."},
@@ -185,7 +185,8 @@ func handleManagement(raw []byte) ([]byte, error) {
 	case req.Method == http.MethodGet && path == base+"/credits":
 		return okEnvelope(mgmtJSONResponse(http.StatusOK, handleCreditsQuery(req)))
 	case req.Method == http.MethodPost && path == base+"/import":
-		return okEnvelope(mgmtJSONResponse(http.StatusOK, handleImportPAT(req)))
+		status, payload := handleImport(req)
+		return okEnvelope(mgmtJSONResponse(status, payload))
 	case req.Method == http.MethodPost && path == base+"/select":
 		return okEnvelope(mgmtJSONResponse(http.StatusOK, handleSelectAuth(req)))
 	case req.Method == http.MethodPost && path == base+"/keepalive":

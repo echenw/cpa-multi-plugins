@@ -5,67 +5,62 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
 	"strings"
 	"time"
 
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
 // handleImportPAT accepts a raw PAT string (pt-...), exchanges it for a
-// jobToken pair, fetches userinfo, and persists via host.auth.save.
+// jobToken pair, fetches userinfo, and persists via the shared panel funnel
+// (persistPanelLoginAuth → buildAuthFileJSON + hostAuthSaveJSONFn).
 // This is the primary onboarding path for QoderWork — PATs are created on
 // qoder.com.cn by the user and pasted into the panel.
-func handleImportPAT(req pluginapi.ManagementRequest) map[string]any {
+// The body carries an optional {region} (cn|intl, default intl = the
+// historical behavior); exchange + record land under that region. An
+// invalid region is a 400 with nothing stored.
+func handleImportPAT(req pluginapi.ManagementRequest) (int, map[string]any) {
 	var body struct {
-		PAT string `json:"pat"`
+		PAT    string `json:"pat"`
+		Region string `json:"region"`
 	}
 	_ = json.Unmarshal(req.Body, &body)
-	pat := strings.TrimSpace(body.PAT)
+	return handleImportPATRaw(strings.TrimSpace(body.PAT), body.Region)
+}
+
+// handleImportPATRaw is handleImportPAT after body decoding: it also serves
+// raw pasted PAT bodies (the /import dispatcher sniffs a leading pt-).
+func handleImportPATRaw(pat, regionParam string) (int, map[string]any) {
+	pat = strings.TrimSpace(pat)
 	if pat == "" {
-		return map[string]any{"success": false, "error": "missing pat field"}
+		return http.StatusBadRequest, map[string]any{"success": false, "error": "missing pat field"}
 	}
 	if !strings.HasPrefix(pat, "pt-") {
-		return map[string]any{"success": false, "error": "PAT must start with pt-"}
+		return http.StatusBadRequest, map[string]any{"success": false, "error": "PAT must start with pt-"}
 	}
-	tok, err := exchangePATForJobToken(pat, regionIntl)
+	region, err := parseImportRegion(regionParam, regionIntl)
 	if err != nil {
-		return map[string]any{"success": false, "error": "jobToken exchange: " + err.Error()}
+		return http.StatusBadRequest, map[string]any{"success": false, "error": err.Error()}
 	}
-	ui, _ := fetchUserInfo(tok.Token, regionIntl) // best-effort
-	sa := buildStoredAuthFromJobToken(pat, tok, ui, regionIntl)
+	tok, err := exchangePATForJobToken(pat, region)
+	if err != nil {
+		return http.StatusOK, map[string]any{"success": false, "error": "jobToken exchange: " + err.Error()}
+	}
+	ui, _ := fetchUserInfo(tok.Token, region) // best-effort
+	sa := buildStoredAuthFromJobToken(pat, tok, ui, region)
 
-	fileJSON, err := buildAuthFileJSON(sa, false, displayNote(sa, nil, false), nil)
+	name, err := persistPanelLoginAuth(sa)
 	if err != nil {
-		return map[string]any{"success": false, "error": err.Error()}
+		return http.StatusOK, map[string]any{"success": false, "error": "persist auth: " + err.Error()}
 	}
-	auth := toAuthData(sa)
-	saveReq := pluginapi.HostAuthSaveRequest{
-		Name: auth.FileName,
-		JSON: fileJSON,
-	}
-	saveBody, _ := json.Marshal(saveReq)
-	rawResp, err := hostCall(pluginabi.MethodHostAuthSave, saveBody)
-	if err != nil {
-		return map[string]any{"success": false, "error": "host.auth.save: " + err.Error()}
-	}
-	var env envelope
-	if err := json.Unmarshal(rawResp, &env); err != nil || !env.OK {
-		msg := "host.auth.save failed"
-		if env.Error != nil && env.Error.Message != "" {
-			msg = env.Error.Message
-		}
-		return map[string]any{"success": false, "error": msg}
-	}
-	var saveResp pluginapi.HostAuthSaveResponse
-	_ = json.Unmarshal(env.Result, &saveResp)
-	return map[string]any{
+	return http.StatusOK, map[string]any{
 		"success":  true,
-		"name":     saveResp.Name,
-		"path":     saveResp.Path,
+		"name":     name,
 		"uid":      sa.Account.UID,
 		"nickname": sa.Account.Nickname,
-		"file":     auth.FileName,
+		"region":   region,
+		"file":     name,
 	}
 }
 
