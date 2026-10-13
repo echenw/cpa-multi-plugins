@@ -13,7 +13,7 @@ func TestIsLegacyCodebuddyAuthName(t *testing.T) {
 		"codebuddy-cn.json":     true,
 		"workbuddy-123.json":    false,
 		"workbuddy.json":        false,
-		"codebuddy-intl-1.json": false,
+		"codebuddy-eu-1.json": false,
 		"codebuddy-cn-backup":   true, // loose prefix match, same as hostAuthList
 	}
 	for name, want := range cases {

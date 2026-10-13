@@ -27,27 +27,24 @@ func isGlobalDomain(domain string) bool {
 const (
 	regionCN     = "cn"
 	regionGlobal = "global"
-	regionIntl   = "intl"
 )
 
-// isIntlDomain reports whether the domain belongs to the codebuddy.ai (Intl)
-// realm adopted from the merged codebuddy-intl plugin (v0.11.0).
-func isIntlDomain(domain string) bool {
-	d := strings.ToLower(strings.TrimSpace(domain))
-	return d == "codebuddy.ai" || strings.HasSuffix(d, ".codebuddy.ai")
-}
-
-// panelRegion returns the display realm: cn | global | intl. Billing and
-// lifecycle keep using accountRegion (cn|global) so Intl accounts preserve
-// their exact pre-merge behavior (they ran the CN code path in the old
-// codebuddy-intl plugin).
+// panelRegion returns the display realm for one account card. CN and Global
+// resolve as usual; any other stored region value (written by an older
+// build, e.g. a retired realm) is returned verbatim so the account keeps
+// listing under the 全部 filter instead of vanishing. Routing helpers
+// (accountRegion / upstreamBaseFor / billingBaseFor) intentionally do NOT
+// mirror this: unknown values fall back to the CN path there, never crash.
 func panelRegion(sa *storedAuth) string {
 	if sa != nil {
 		if isGlobalDomain(sa.Auth.Domain) {
 			return regionGlobal
 		}
-		if isIntlDomain(sa.Auth.Domain) {
-			return regionIntl
+		if r := strings.ToLower(strings.TrimSpace(sa.Auth.Region)); r != "" {
+			if r == regionCN || r == regionGlobal {
+				return r
+			}
+			return r
 		}
 	}
 	return regionCN
@@ -56,8 +53,6 @@ func panelRegion(sa *storedAuth) string {
 // upstreamBaseForRegion returns the chat/auth gateway for a login region.
 func upstreamBaseForRegion(region string) string {
 	switch region {
-	case regionIntl:
-		return upstreamBaseIntl
 	case regionGlobal:
 		return upstreamBaseGlobal
 	default:
@@ -65,45 +60,23 @@ func upstreamBaseForRegion(region string) string {
 	}
 }
 
-// applyRealmHeaders adjusts protocol headers for the Intl (codebuddy.ai)
-// realm: the Intl gateway expects the IDE client header set (X-IDE-Type
-// "IDE", product 1.100.0) and no X-Requested-With. Runs AFTER
-// applyPlatformHeaders so Intl values win for adopted codebuddy-intl
-// accounts (their LoginPlatform is "ide").
-func applyRealmHeaders(req *http.Request, sa *storedAuth) {
-	if sa == nil || !isIntlDomain(sa.Auth.Domain) {
-		return
-	}
-	req.Header.Del("X-Requested-With")
-	req.Header.Set("X-IDE-Type", "IDE")
-	req.Header.Set("X-IDE-Name", "CodeBuddy")
-	req.Header.Set("X-IDE-Version", "1.100.0")
-	req.Header.Set("X-Product-Version", "1.100.0")
-}
-
 // accountRegion returns "cn" or "global" based on the auth's domain field.
 // Empty domain (legacy auth files) defaults to "cn" for backward compat.
+// Unknown stored region values fall back to domain sniffing, then "cn" —
+// they never crash routing; display keeps them verbatim via panelRegion.
 func accountRegion(sa *storedAuth) string {
 	if sa != nil {
 		// Explicit region wins (written by login + import adoption).
 		switch strings.ToLower(strings.TrimSpace(sa.Auth.Region)) {
-		case "intl":
-			return "intl"
 		case "global":
 			return "global"
 		case "cn":
 			return "cn"
 		}
-		// Legacy files: domain sniff. codebuddy.ai is the Intl IDE realm
-		// (merged codebuddy-intl plugin) — it is NOT workbuddy.ai Global
-		// and must not fall into the CN default (v0.12.15 fix: Intl
-		// credentials surfaced as "CN" in the credential manager).
+		// Legacy files: domain sniff.
 		d := strings.ToLower(strings.TrimSpace(sa.Auth.Domain))
 		if isGlobalDomain(d) {
 			return "global"
-		}
-		if d == "codebuddy.ai" || strings.HasSuffix(d, ".codebuddy.ai") {
-			return "intl"
 		}
 	}
 	return "cn"
@@ -127,24 +100,10 @@ func setBillingBaseGlobal(s string) func() {
 // billingBaseFor returns the billing API base URL for the given auth's domain.
 // CN accounts → https://www.codebuddy.cn; Global → https://www.workbuddy.ai.
 // Falls back to the test-overridable billingBase for CN/nil.
-// billingBaseIntl is the CodeBuddy Intl (www.codebuddy.ai) billing base.
-// v0.12.10 fix: Intl accounts were posting check-in / meter calls to the CN
-// gas station (www.codebuddy.cn) where their Bearer tokens are unknown — the
-// APISIX gateway answered with the 401 HTML page that surfaced as
-// "parse failed: invalid character '<'" right after a successful Intl login.
-var billingBaseIntl = "https://www.codebuddy.ai"
-
 func billingBaseFor(sa *storedAuth) string {
 	if sa != nil {
 		if isGlobalDomain(sa.Auth.Domain) {
 			return billingBaseGlobal
-		}
-		// v0.12.10 fix: Intl (codebuddy.ai) accounts must hit the Intl gas
-		// station, not the CN one — CN's APISIX gateway rejects Intl Bearer
-		// tokens with the 401 HTML page ("parse failed: invalid character
-		// '<'") immediately after a successful Intl login.
-		if isIntlDomain(sa.Auth.Domain) {
-			return billingBaseIntl
 		}
 	}
 	return billingBase
@@ -169,16 +128,6 @@ func billingHeaders(req *http.Request, sa *storedAuth) {
 		req.Header.Set("X-Domain", sa.Auth.Domain)
 	}
 	req.Header.Set("User-Agent", "CodeBuddy")
-	// Intl realm parity (applyRealmHeaders): the codebuddy.ai gateway expects
-	// the IDE client header set and no X-Requested-With. Without these the
-	// request is treated as a browser call and bounced (401).
-	if isIntlDomain(sa.Auth.Domain) {
-		req.Header.Del("X-Requested-With")
-		req.Header.Set("X-IDE-Type", "IDE")
-		req.Header.Set("X-IDE-Name", "CodeBuddy")
-		req.Header.Set("X-IDE-Version", "1.100.0")
-		req.Header.Set("X-Product-Version", "1.100.0")
-	}
 }
 
 func billingCall(sa *storedAuth, path string, body any) (json.RawMessage, error) {
@@ -193,7 +142,7 @@ func billingCall(sa *storedAuth, path string, body any) (json.RawMessage, error)
 		// (fresh connection per attempt, tcp4-first dialing) — the pooled path
 		// just failed with a transport error, so hammering the exact same
 		// socket state is how 3-for-3 EOF exhaustion happens. Attempt 2 forces
-		// the HOST BRIDGE despite the codebuddy.ai direct bypass: the bridge
+		// the HOST BRIDGE despite the direct bypass: the bridge
 		// applies the host's own transport policy (config.yaml proxy-url), the
 		// one path that works when the deployment's proxy lives only in CPA
 		// config and the plugin hasn't seen a HostConfigSummary yet.
@@ -214,7 +163,7 @@ func billingCall(sa *storedAuth, path string, body any) (json.RawMessage, error)
 		// connections (a poisoned pooled conn would otherwise serve the
 		// next billing call straight from the pool).
 		billingResetDialState()
-		return data, fmt.Errorf("%w — billing gateway unreachable after %d attempts (direct pooled+rescue fresh-conn/v4 and host-bridge paths; set proxy-url in CPA config.yaml or HTTPS_PROXY on the host process if codebuddy.ai/workbuddy.ai needs a proxy from this network)%s", err, attempts, billingNetDiagSuffix(billingBaseFor(sa)))
+		return data, fmt.Errorf("%w — billing gateway unreachable after %d attempts (direct pooled+rescue fresh-conn/v4 and host-bridge paths; set proxy-url in CPA config.yaml or HTTPS_PROXY on the host process if workbuddy.ai needs a proxy from this network)%s", err, attempts, billingNetDiagSuffix(billingBaseFor(sa)))
 	}
 	return data, err
 }
@@ -224,7 +173,7 @@ func billingCall(sa *storedAuth, path string, body any) (json.RawMessage, error)
 //
 // v0.12.64: the comment always promised transport retries but the impl only
 // matched 5xx prefixes — transport EOFs ("Post \"https://...\": EOF" from the
-// codebuddy.ai gateway closing the connection mid-request) surfaced straight
+// upstream gateway closing the connection mid-request) surfaced straight
 // to the panel as hard failures. Now classified: EOF / connection reset /
 // broken pipe / client-timeout / TLS-handshake-timeout / dial failures.
 // Business errors ("parse failed: ...", "code NNNN: ...") match none of these.
@@ -270,7 +219,7 @@ func billingCallOnce(sa *storedAuth, path string, body any, attempt int) (json.R
 	}
 	base := billingBaseFor(sa)
 	// v0.9.48: bound the billing call with a context timeout so a hung
-	// codebuddy.ai gateway connection (field report: EOF after 6.84s)
+	// gateway connection (field report: EOF after 6.84s)
 	// doesn't block the full 120s host-bridge ceiling. 15s is enough
 	// for any legitimate meter/checkin/plan call (all are fast JSON APIs).
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

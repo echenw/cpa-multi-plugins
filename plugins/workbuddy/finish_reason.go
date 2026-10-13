@@ -1,6 +1,6 @@
 // finish_reason.go — terminal-chunk finish_reason correction (issue #36).
 //
-// The intl/IDE upstream (codebuddy.ai) emits Anthropic-style stop semantics
+// The IDE upstream emits Anthropic-style stop semantics
 // through its OpenAI-compat conversion: its internal end_turn maps to
 // finish_reason:"stop" even when the same response carried tool_calls deltas.
 // Per the OpenAI chat-completions contract a message with non-empty

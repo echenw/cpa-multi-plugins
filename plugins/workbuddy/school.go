@@ -320,7 +320,7 @@ func tasksSchoolOnce(sa *storedAuth, add func(string, ...any)) {
 // handleSchoolVouchers serves GET /v0/management/plugins/workbuddy/school/vouchers —
 // read-only voucher + chance scan for the panel 券码 dialog (the full /tasks
 // scan costs 5 upstream calls per account; this one costs 2 and returns only
-// the school-season state). CN accounts only; global/intl return a clean
+// the school-season state). CN accounts only; non-CN return a clean
 // skipped entry. Failures are per-account, never fatal.
 func handleSchoolVouchers(req pluginapi.ManagementRequest) map[string]any {
 	files, err := hostAuthList()

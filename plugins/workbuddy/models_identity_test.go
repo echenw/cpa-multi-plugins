@@ -13,19 +13,19 @@ import (
 // o4-mini/enhance-1.0/auto-chat and no deepseek series; CLI UA → 22 chat
 // with deepseek-v4.1-flash/-sg, gpt-6-astra, kimi-k2.8-preview and none of
 // those aliases). issue #17: the plugin only ever presented the IDE
-// identity, so an Intl credential showed 8 models while the CLI roster was
+// identity, so a Global credential showed 8 models while the CLI roster was
 // invisible. These tests pin the union machinery.
 
 func TestV3ProbeUAsFor(t *testing.T) {
-	cases := map[string]int{"global": 2, "intl": 2, "cn": 1, "": 1, "unknown": 1}
+	cases := map[string]int{"global": 2, "cn": 1, "": 1, "unknown": 1}
 	for realm, want := range cases {
 		if got := len(v3ProbeUAsFor(realm)); got != want {
 			t.Errorf("realm=%q: %d UAs, want %d", realm, got, want)
 		}
 	}
-	uas := v3ProbeUAsFor("intl")
+	uas := v3ProbeUAsFor("global")
 	if uas[0] != v3ConfigUA || uas[1] != v3ConfigCLIUA {
-		t.Errorf("intl probe order %v — the IDE identity must be first (field authority)", uas)
+		t.Errorf("global probe order %v — the IDE identity must be first (field authority)", uas)
 	}
 	if cn := v3ProbeUAsFor("cn"); len(cn) != 1 || cn[0] != v3ConfigUA {
 		t.Errorf("cn must stay IDE-UA single-probe, got %v", cn)
@@ -155,15 +155,6 @@ func TestEnterpriseEndpointCandidates(t *testing.T) {
 	}
 	if origin != "https://www.workbuddy.ai" {
 		t.Errorf("global origin = %q", origin)
-	}
-	urls, origin = enterpriseEndpointCandidates("intl")
-	if len(urls) != 2 ||
-		urls[0] != "https://www.codebuddy.ai/v2/enterprises/personal/models" ||
-		urls[1] != "https://www.codebuddy.ai/console/enterprises/personal/models" {
-		t.Errorf("intl candidates = %v, want [/v2, /console] on codebuddy.ai", urls)
-	}
-	if origin != "https://www.codebuddy.ai" {
-		t.Errorf("intl origin = %q", origin)
 	}
 	// cn keeps its measured /console-only sequence.
 	urls, _ = enterpriseEndpointCandidates("cn")

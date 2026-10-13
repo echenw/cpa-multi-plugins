@@ -135,7 +135,7 @@ func modalStart(t *testing.T, body string) (string, map[string]any) {
 func TestModalLoginStartReturnsStateAndExpiry(t *testing.T) {
 	_ = withLoginModalServer(t)
 
-	for _, body := range []string{`{}`, `{"region":"cn"}`, `{"region":"intl"}`} {
+	for _, body := range []string{`{}`, `{"region":"cn"}`, `{"region":"global"}`} {
 		state, payload := modalStart(t, body)
 		if state != "st-modal" {
 			t.Fatalf("body %q: state = %q, want st-modal", body, state)

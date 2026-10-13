@@ -3,7 +3,7 @@
 // billing_live_test.go — real-credential verification that the plugin's
 // production billing path returns actual credit data. This is the pre-release
 // gate for billing EOF fixes: it exercises billingCall → billingCallOnce →
-// hostHTTPDo (codebuddy.ai direct bypass → hostHTTPDoDirect) → pooled/rescue
+// hostHTTPDo (workbuddy.ai direct bypass → hostHTTPDoDirect) → pooled/rescue
 // transports with the resilient dialer — the exact code path a deployed .so
 // runs.
 //
@@ -29,7 +29,7 @@ func TestLiveBilling_GetUserResource(t *testing.T) {
 	uid := os.Getenv("WB_UID")
 
 	sa := &storedAuth{
-		Auth:    storedTokens{AccessToken: jwt, Domain: "www.codebuddy.ai", Region: "intl", LoginPlatform: "ide"},
+		Auth:    storedTokens{AccessToken: jwt, Domain: "www.workbuddy.ai", Region: "global", LoginPlatform: "ide"},
 		Account: storedAccount{UID: uid},
 	}
 	now := time.Now()
@@ -47,7 +47,7 @@ func TestLiveBilling_GetUserResource(t *testing.T) {
 		t.Fatalf("live billing call failed: %v", err)
 	}
 
-	// billingCall returns the apiEnvelope data member. The Intl meter API
+	// billingCall returns the apiEnvelope data member. The Global meter API
 	// nests one level deeper: {"Response":{"Data":{"TotalDosage":...}}}.
 	var payload struct {
 		Response struct {
@@ -77,7 +77,7 @@ func TestLiveBilling_GetUserResource(t *testing.T) {
 func TestLiveBilling_DialStageEvidence(t *testing.T) {
 	uid := os.Getenv("WB_UID")
 	_ = uid
-	suffix := billingNetDiagSuffix("https://www.codebuddy.ai")
+	suffix := billingNetDiagSuffix("https://www.workbuddy.ai")
 	if suffix == "" {
 		t.Fatal("expected non-empty diag suffix for a hostname base")
 	}

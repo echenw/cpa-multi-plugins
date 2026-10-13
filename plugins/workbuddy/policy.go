@@ -175,8 +175,6 @@ func upstreamReadError(err error) error {
 func notePrefix(sa *storedAuth, disabled bool) string {
 	region := "CN"
 	switch accountRegion(sa) {
-	case "intl":
-		region = "INTL"
 	case "global":
 		region = "Global"
 	}
@@ -205,6 +203,10 @@ func creditSegmentFromNote(note string) string {
 	segments := make([]string, 0, len(parts))
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
+		// SAFE-READER FALLBACK (stored values): "INTL" is the retired-realm
+		// prefix older builds wrote into notes. It is stripped here so a
+		// legacy note never resurrects as a fake credit segment; no new
+		// notes ever carry it (notePrefix only emits CN/Global).
 		if part == "" || part == "CN" || part == "INTL" || part == "Global" || part == "已禁用" {
 			continue
 		}
@@ -285,8 +287,6 @@ func labelForAuth(sa *storedAuth) string {
 	}
 	tag := "CN"
 	switch accountRegion(sa) {
-	case "intl":
-		tag = "Intl"
 	case "global":
 		tag = "Global"
 	}

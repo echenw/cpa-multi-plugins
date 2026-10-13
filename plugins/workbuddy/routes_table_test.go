@@ -73,7 +73,7 @@ func TestManagementRoutesTableIntegrity(t *testing.T) {
 func TestManagementRoutesDispatchSmoke(t *testing.T) {
 	// Redirect the login endpoints to a hermetic server: POST /login/start
 	// is a declared route and the smoke dispatches it with `{}` (default
-	// intl), which would otherwise call the real upstream auth/state.
+	// global), which would otherwise call the real upstream auth/state.
 	_, _ = withLoginEndpointsServer(t)
 	// Reset the plugin-layer rate limiter: the smoke dispatches several POST
 	// routes back-to-back and the shared "_global" bucket would otherwise

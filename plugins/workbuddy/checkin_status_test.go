@@ -85,7 +85,7 @@ func TestFetchCheckinStatus_AmbiguousFirstPayloadProbesSecond(t *testing.T) {
 
 // The common case must stay a single upstream call: a payload that explicitly
 // carries today_checked_in is authoritative and the second endpoint is never
-// consulted (false stays false — no pointless OR-flip).
+// consulted (false stays false — no needless OR-flip).
 func TestFetchCheckinStatus_AuthoritativeFirstPayloadSingleCall(t *testing.T) {
 	const p1 = "/v2/billing/meter/checkin-activity-status"
 	const p2 = "/v2/billing/meter/checkin-status"

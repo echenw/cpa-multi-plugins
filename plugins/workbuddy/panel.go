@@ -19,7 +19,7 @@ type wbAccount struct {
 	Label        string            `json:"label"`
 	Nickname     string            `json:"nickname"`
 	UID          string            `json:"uid"`
-	Region       string            `json:"region"` // "cn" | "global" | "intl"
+	Region       string            `json:"region"` // "cn" | "global" (older builds may have stored other values; those are passed through verbatim so the card keeps listing)
 	Plan         string            `json:"plan"`
 	Status       string            `json:"status"`
 	Disabled     bool              `json:"disabled"`

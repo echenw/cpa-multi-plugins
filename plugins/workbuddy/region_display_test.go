@@ -2,27 +2,24 @@ package main
 
 import "testing"
 
-// v0.12.15: Intl (codebuddy.ai) credentials previously surfaced as "CN" in
-// the credential manager — accountRegion only knew workbuddy.ai Global and
-// defaulted everything else to cn. The fix adds an explicit auth.region
-// (written at login/import) plus a codebuddy.ai domain-sniff fallback, and
-// the display helpers gain the INTL state.
+// Display vs routing contract: accountRegion only knows cn/global (unknown
+// stored values fall back to cn for routing and never crash), while
+// panelRegion passes unknown stored region values through verbatim so those
+// cards keep listing under the 全部 filter.
 
-func TestAccountRegionV01215(t *testing.T) {
+func TestAccountRegionTwoWay(t *testing.T) {
 	cases := []struct {
 		name   string
 		sa     *storedAuth
 		region string
 	}{
 		// explicit region wins over any domain
-		{"explicit intl wins", &storedAuth{Auth: storedTokens{Region: "intl", Domain: "copilot.tencent.com"}}, "intl"},
 		{"explicit global wins", &storedAuth{Auth: storedTokens{Region: "global"}}, "global"},
-		{"explicit cn wins", &storedAuth{Auth: storedTokens{Region: "cn", Domain: "codebuddy.ai"}}, "cn"},
-		{"explicit case/space tolerant", &storedAuth{Auth: storedTokens{Region: " INTL "}}, "intl"},
-		// legacy sniff: codebuddy.ai is Intl, NOT cn
-		{"intl domain bare", &storedAuth{Auth: storedTokens{Domain: "codebuddy.ai"}}, "intl"},
-		{"intl domain subdomain", &storedAuth{Auth: storedTokens{Domain: "api.codebuddy.ai"}}, "intl"},
-		{"intl domain uppercase", &storedAuth{Auth: storedTokens{Domain: "CodeBuddy.AI"}}, "intl"},
+		{"explicit cn wins", &storedAuth{Auth: storedTokens{Region: "cn", Domain: "workbuddy.ai"}}, "cn"},
+		{"explicit case/space tolerant", &storedAuth{Auth: storedTokens{Region: " GLOBAL "}}, "global"},
+		// unknown stored values fall back to cn for routing (never crash)
+		{"unknown region falls back cn", &storedAuth{Auth: storedTokens{Region: "eu", Domain: "copilot.tencent.com"}}, "cn"},
+		{"unknown region no domain falls back cn", &storedAuth{Auth: storedTokens{Region: "eu"}}, "cn"},
 		// legacy sniff regression guards (old behaviour must survive)
 		{"global domain still global", &storedAuth{Auth: storedTokens{Domain: "www.workbuddy.ai"}}, "global"},
 		{"cn domain still cn", &storedAuth{Auth: storedTokens{Domain: "www.codebuddy.cn"}}, "cn"},
@@ -36,13 +33,33 @@ func TestAccountRegionV01215(t *testing.T) {
 	}
 }
 
-func TestDisplayNoteThreeWayV01215(t *testing.T) {
+func TestPanelRegionVerbatimFallback(t *testing.T) {
+	cases := []struct {
+		name   string
+		sa     *storedAuth
+		region string
+	}{
+		{"global domain", &storedAuth{Auth: storedTokens{Domain: "workbuddy.ai"}}, "global"},
+		{"cn domain", &storedAuth{Auth: storedTokens{Domain: "www.codebuddy.cn"}}, "cn"},
+		{"unknown stored region verbatim", &storedAuth{Auth: storedTokens{Region: "eu"}}, "eu"},
+		{"unknown stored region verbatim mixed case", &storedAuth{Auth: storedTokens{Region: " EU "}}, "eu"},
+		{"empty still cn", &storedAuth{}, "cn"},
+		{"nil still cn", nil, "cn"},
+	}
+	for _, tc := range cases {
+		if got := panelRegion(tc.sa); got != tc.region {
+			t.Errorf("%s: panelRegion() = %q, want %q", tc.name, got, tc.region)
+		}
+	}
+}
+
+func TestDisplayNoteTwoWay(t *testing.T) {
 	cases := []struct {
 		name string
 		sa   *storedAuth
 		want string
 	}{
-		{"intl note", &storedAuth{Auth: storedTokens{Region: "intl"}}, "INTL · 积分未知"},
+		{"unknown region routes cn", &storedAuth{Auth: storedTokens{Region: "eu"}}, "CN · 积分未知"},
 		{"global note", &storedAuth{Auth: storedTokens{Domain: "workbuddy.ai"}}, "Global · 积分未知"},
 		{"cn note", &storedAuth{Auth: storedTokens{Domain: "www.codebuddy.cn"}}, "CN · 积分未知"},
 	}
@@ -53,16 +70,16 @@ func TestDisplayNoteThreeWayV01215(t *testing.T) {
 	}
 }
 
-func TestLabelForAuthThreeWayV01215(t *testing.T) {
+func TestLabelForAuthTwoWay(t *testing.T) {
 	cases := []struct {
 		name string
 		sa   *storedAuth
 		want string
 	}{
-		{"intl label", &storedAuth{Auth: storedTokens{Region: "intl"}}, "WorkBuddy [Intl]"},
+		{"unknown region routes cn", &storedAuth{Auth: storedTokens{Region: "eu"}}, "WorkBuddy [CN]"},
 		{"global label", &storedAuth{Auth: storedTokens{Domain: "workbuddy.ai"}}, "WorkBuddy [Global]"},
 		{"cn label", &storedAuth{}, "WorkBuddy [CN]"},
-		{"nickname kept", &storedAuth{Account: storedAccount{Nickname: "Alice"}, Auth: storedTokens{Region: "intl"}}, "Alice [Intl]"},
+		{"nickname kept", &storedAuth{Account: storedAccount{Nickname: "Alice"}, Auth: storedTokens{Domain: "workbuddy.ai"}}, "Alice [Global]"},
 	}
 	for _, tc := range cases {
 		if got := labelForAuth(tc.sa); got != tc.want {

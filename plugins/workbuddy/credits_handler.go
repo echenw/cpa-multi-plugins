@@ -45,11 +45,8 @@ func handleImportAuth(req pluginapi.ManagementRequest) map[string]any {
 		if t == "" {
 			t = strings.ToLower(strings.TrimSpace(typed.Provider))
 		}
-		switch t {
-		case "", "workbuddy", "workbuddy-cn", "workbuddy-global", "workbuddy-intl",
-			"codebuddy", "codebuddy-cn", "codebuddy-intl":
-			// this plugin's own family (or untyped) — accept below
-		default:
+		if t != "" && t != "workbuddy" && t != "codebuddy" &&
+			!strings.HasPrefix(t, "workbuddy-") && !strings.HasPrefix(t, "codebuddy-") {
 			return map[string]any{"success": false, "error": fmt.Sprintf(
 				"credential type %q belongs to another plugin — use that plugin's own login/import instead", t)}
 		}

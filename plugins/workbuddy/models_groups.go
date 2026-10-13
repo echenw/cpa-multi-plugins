@@ -35,7 +35,7 @@ import (
 
 // modelGroupRealmOrder is the fixed presentation order; a realm with zero
 // credentials still renders (empty group) so the picker shows every channel.
-var modelGroupRealmOrder = []string{"cn", "global", "intl"}
+var modelGroupRealmOrder = []string{"cn", "global"}
 
 // modelGroupRealmLabel renders the human-facing realm title. Keep in sync
 // with the login-platform config description in main.go and the panel badges.
@@ -45,8 +45,6 @@ func modelGroupRealmLabel(realm string) string {
 		return "CN（copilot.tencent.com）"
 	case "global":
 		return "Global（workbuddy.ai）"
-	case "intl":
-		return "Intl（codebuddy.ai）"
 	default:
 		return realm
 	}

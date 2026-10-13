@@ -293,7 +293,7 @@ func pumpUpstreamStream(httpReq *http.Request, cancel context.CancelFunc, stream
 	}
 	publishUsage(requestedModel, upstreamModel, authUID, started, collector.detail(), false, 0, "")
 	// v0.9.25: learn the real model behind a tier alias from the response
-	// echo (Intl only — no-op for every other id).
+	// echo (legacy-realm aliases only — no-op for every other id).
 	noteLearnedRealModel(upstreamModel, collector.respModel)
 	invalidateAccountCredits(authID, authUID)
 }
@@ -765,7 +765,7 @@ func aggregateCompletion(r io.Reader, model string) ([]byte, error) {
 	if created == 0 {
 		created = time.Now().Unix()
 	}
-	// Issue #36: the intl/IDE upstream maps its internal end_turn to
+	// Issue #36: the IDE upstream maps its internal end_turn to
 	// "stop" even after emitting tool_calls — a folded message carrying
 	// tool_calls must finish with "tool_calls" (see finish_reason.go).
 	foldCalls := 0

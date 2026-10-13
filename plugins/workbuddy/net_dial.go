@@ -2,7 +2,7 @@
 //
 // Field data from v0.8.52→v0.8.55 shows every transport variant (pooled
 // h1.1, rescue fresh-conn tcp4, host bridge) failing simultaneously with EOF
-// on deployments where direct egress to codebuddy.ai/workbuddy.ai is broken,
+// on deployments where direct egress to the billing hosts is broken,
 // while the same transports verify 200 from healthy networks. Three
 // machine-level causes produce that exact all-paths-EOF signature:
 //

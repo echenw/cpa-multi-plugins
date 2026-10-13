@@ -1,7 +1,7 @@
 // proxy_policy.go carries the host-configured upstream proxy into the plugin's
 // direct HTTP transports. The billing path bypasses the host http bridge
 // (v0.9.49 — the bridge's default transport negotiates HTTP/2, which the
-// codebuddy.ai APISIX gateway drops mid-request), and that bypass also dropped
+// upstream APISIX gateway drops mid-request), and that bypass also dropped
 // every host transport policy — including the proxy configured in CPA's
 // config.yaml (`proxy-url`). Field timeline (2026-10-04): credits display
 // worked while billing rode the bridge (proxy applied), broke with

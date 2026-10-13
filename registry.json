@@ -4,7 +4,7 @@
     {
       "id": "workbuddy",
       "name": "CodeBuddy",
-      "description": "Tencent CodeBuddy / WorkBuddy unified provider for CPA (merged v0.9.0 + v0.11.0): one credit pool, three realms (copilot.tencent.com CN, workbuddy.ai Global, codebuddy.ai Intl), dual login platforms (CLI + CodeBuddy IDE), auto-adopts legacy codebuddy-cn / codebuddy-intl auth files, OpenAI-compatible chat, daily check-in, credit lifecycle, multi-account pool.",
+      "description": "Tencent CodeBuddy / WorkBuddy unified provider for CPA (merged v0.9.0 + v0.11.0): one credit pool, two realms (copilot.tencent.com CN, workbuddy.ai Global), dual login platforms (CLI + CodeBuddy IDE), auto-adopts legacy codebuddy-cn auth files, OpenAI-compatible chat, daily check-in, credit lifecycle, multi-account pool.",
       "author": "REPLACE_ME",
       "version": "0.1.0",
       "repository": "REPLACE_ME",

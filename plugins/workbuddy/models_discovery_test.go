@@ -247,19 +247,19 @@ func TestModelsFromDiscoveryModalityFlags(t *testing.T) {
 	}
 }
 
-// v0.12.64: codebuddy.ai (Intl) discovery returns opaque product-tier
+// v0.12.64: the retired realm's discovery returns opaque product-tier
 // aliases (fast-model / auto-chat / balanced-model / default-model). They
 // are the real routable ids, but the display name must say so — the user
 // cannot tell a tier alias from a model family, and the limited-free
 // "deepseek flash" (2026-09) hides behind one of them. Real ids and rows
 // that already carry a richer upstream display name stay untouched.
-func TestDiscoverToInfoIntlAliasAnnotation(t *testing.T) {
+func TestDiscoverToInfoLegacyAliasAnnotation(t *testing.T) {
 	for id, want := range map[string]string{
 		"fast-model":     "Fast Model（上游别名）",
 		"auto-chat":      "Auto Chat（上游别名）",
 		"balanced-model": "Balanced Model（上游别名）",
 		"default-model":  "Default Model（上游别名）",
-		// v0.9.25 field report: Intl discovery surfaced three more tier ids.
+		// v0.9.25 field report: that realm's discovery surfaced three more tier ids.
 		"primary-model": "Primary Model（上游别名）",
 		"deep-model":    "Deep Model（上游别名）",
 		"enhance-1.0":   "Enhance 1.0（上游别名）",

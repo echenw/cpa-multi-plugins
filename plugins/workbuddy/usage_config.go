@@ -59,7 +59,7 @@ var (
 	managementAPIKeyMu sync.RWMutex
 
 	// pinnedModels: per-realm user-pinned model ID lists from config_yaml
-	// models_cn / models_global / models_intl (comma-separated upstream IDs).
+	// models_cn / models_global (comma-separated upstream IDs).
 	// When set for a realm, the credential model output is exactly this list
 	// and dynamic discovery is skipped for it (v0.12.19) — the user-written
 	// "which models this credential supports" contract. Reconfigure with the
@@ -255,11 +255,6 @@ func configure(raw []byte) {
 				if strings.HasPrefix(line, "models_global:") {
 					if ids := parsePinnedModelList(strings.TrimPrefix(line, "models_global:")); len(ids) > 0 {
 						nextPinned["global"] = ids
-					}
-				}
-				if strings.HasPrefix(line, "models_intl:") {
-					if ids := parsePinnedModelList(strings.TrimPrefix(line, "models_intl:")); len(ids) > 0 {
-						nextPinned["intl"] = ids
 					}
 				}
 			}

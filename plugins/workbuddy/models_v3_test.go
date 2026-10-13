@@ -156,14 +156,11 @@ func TestV3ConfigEndpointsPerRealm(t *testing.T) {
 	if got := v3ConfigEndpointFor("cn"); got != "https://copilot.tencent.com/v3/config" {
 		t.Errorf("cn v3 endpoint = %q", got)
 	}
-	if got := v3ConfigEndpointFor("intl"); got != "https://www.codebuddy.ai/v3/config" {
-		t.Errorf("intl v3 endpoint = %q", got)
-	}
 	if got := v3ConfigEndpointFor("global"); got != "https://www.workbuddy.ai/v3/config" {
 		t.Errorf("global v3 endpoint = %q", got)
 	}
-	if got := v3ConfigDomainFor("intl"); got != "www.codebuddy.ai" {
-		t.Errorf("intl v3 domain = %q", got)
+	if got := v3ConfigDomainFor("global"); got != "www.workbuddy.ai" {
+		t.Errorf("global v3 domain = %q", got)
 	}
 	if got := v3ConfigDomainFor("cn"); got != "copilot.tencent.com" {
 		t.Errorf("cn v3 domain = %q", got)

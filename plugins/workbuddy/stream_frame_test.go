@@ -121,11 +121,12 @@ func TestBackendHeaders_IDEDefaultFillsBlankOnly(t *testing.T) {
 		t.Fatalf("IDE-platform override must survive, got %q", req2.Header.Get("X-IDE-Name"))
 	}
 
-	// An Intl realm account keeps its CodeBuddy identity.
-	intl := &storedAuth{Auth: storedTokens{AccessToken: "at", Domain: "codebuddy.ai"}}
+	// A stored account from a retired realm takes the default identity
+	// fill (no per-realm override exists anymore) and never crashes.
+	legacy := &storedAuth{Auth: storedTokens{AccessToken: "at", Domain: "legacy.example"}}
 	req3 := &http.Request{Header: http.Header{}}
-	backendHeaders(req3, intl)
-	if req3.Header.Get("X-IDE-Name") != "CodeBuddy" {
-		t.Fatalf("Intl realm override must survive, got %q", req3.Header.Get("X-IDE-Name"))
+	backendHeaders(req3, legacy)
+	if req3.Header.Get("X-IDE-Name") != "WorkBuddy" {
+		t.Fatalf("legacy-realm account must take the default identity, got %q", req3.Header.Get("X-IDE-Name"))
 	}
 }

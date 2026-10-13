@@ -14,14 +14,13 @@ func realmExclusionHost() pluginapi.HostConfigSummary {
 		ExcludedModels: map[string][]string{
 			"workbuddy":        {"shared-1"},
 			"workbuddy-cn":     {"cn-only", "shared-1"},
-			"workbuddy-intl":   {"intl-only"},
-			"workbuddy-global": nil,
+			"workbuddy-global": {"global-only"},
 		},
 	}
 }
 
 func realmExclusionModels() []pluginapi.ModelInfo {
-	return realmTestModels("shared-1", "cn-only", "intl-only", "free-1")
+	return realmTestModels("shared-1", "cn-only", "global-only", "free-1")
 }
 
 // TestFilterExcludedRealmSubKeys pins the v0.9.39 granularity contract of
@@ -33,27 +32,22 @@ func TestFilterExcludedRealmSubKeys(t *testing.T) {
 
 	// Provider key alone: applies to every realm.
 	got := filterExcludedModels(realmExclusionModels(), host)
-	want := []string{"cn-only", "intl-only", "free-1"}
+	want := []string{"cn-only", "global-only", "free-1"}
 	assertModelIDs(t, got, want)
 
 	// Sub-key cn: provider ∪ workbuddy-cn, deduped.
 	got = filterExcludedModelsForRealm(realmExclusionModels(), host, "cn")
-	want = []string{"intl-only", "free-1"}
+	want = []string{"global-only", "free-1"}
 	assertModelIDs(t, got, want)
 
-	// Sub-key intl: only intl-only joins the provider entry.
-	got = filterExcludedModelsForRealm(realmExclusionModels(), host, "intl")
-	want = []string{"cn-only", "free-1"}
-	assertModelIDs(t, got, want)
-
-	// Sub-key global: entry exists but is empty → provider key only.
+	// Sub-key global: only global-only joins the provider entry.
 	got = filterExcludedModelsForRealm(realmExclusionModels(), host, "global")
-	want = []string{"cn-only", "intl-only", "free-1"}
+	want = []string{"cn-only", "free-1"}
 	assertModelIDs(t, got, want)
 
 	// No realm context (model.static): provider key only.
 	got = filterExcludedModelsForRealm(realmExclusionModels(), host, "")
-	want = []string{"cn-only", "intl-only", "free-1"}
+	want = []string{"cn-only", "global-only", "free-1"}
 	assertModelIDs(t, got, want)
 
 	// Hand-written key case drift is tolerated by the scan fallback.
@@ -64,7 +58,7 @@ func TestFilterExcludedRealmSubKeys(t *testing.T) {
 		},
 	}
 	got = filterExcludedModelsForRealm(realmExclusionModels(), hostCaseDrift, "cn")
-	want = []string{"intl-only", "free-1"}
+	want = []string{"global-only", "free-1"}
 	assertModelIDs(t, got, want)
 }
 

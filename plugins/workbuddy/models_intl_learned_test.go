@@ -9,27 +9,27 @@ import (
 // resetLearnedAliases clears the package-global learned-mapping store so
 // tests stay order-independent.
 func resetLearnedAliases() {
-	intlLearnedReal.Range(func(k, _ any) bool {
-		intlLearnedReal.Delete(k)
+	legacyLearnedReal.Range(func(k, _ any) bool {
+		legacyLearnedReal.Delete(k)
 		return true
 	})
 }
 
-// TestIntlAliasDisplayNames_FieldReportCoverage — every tier alias observed
+// TestLegacyAliasDisplayNames_FieldReportCoverage — every tier alias observed
 // in the 2026-09-20 field reports (initial: 4 ids; user panel later the
 // same day: +primary-model / deep-model / enhance-1.0) must carry an
 // annotation. Genuine model ids stay out of the map.
-func TestIntlAliasDisplayNames_FieldReportCoverage(t *testing.T) {
+func TestLegacyAliasDisplayNames_FieldReportCoverage(t *testing.T) {
 	for _, id := range []string{
 		"fast-model", "auto-chat", "balanced-model", "default-model",
 		"primary-model", "deep-model", "enhance-1.0",
 	} {
-		if _, ok := intlAliasDisplayNames[id]; !ok {
-			t.Errorf("tier alias %q missing from intlAliasDisplayNames", id)
+		if _, ok := legacyTierAliasDisplayNames[id]; !ok {
+			t.Errorf("tier alias %q missing from legacyTierAliasDisplayNames", id)
 		}
 	}
 	for _, real := range []string{"o4-mini", "hy4-preview", "glm-4.6"} {
-		if _, ok := intlAliasDisplayNames[real]; ok {
+		if _, ok := legacyTierAliasDisplayNames[real]; ok {
 			t.Errorf("genuine model id %q must not be annotated as a tier alias", real)
 		}
 	}

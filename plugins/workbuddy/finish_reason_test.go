@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// issue #36 (onlyjco): the intl/IDE upstream maps its internal end_turn to
+// issue #36 (onlyjco): the IDE upstream maps its internal end_turn to
 // finish_reason:"stop" even after emitting tool_calls deltas, so a
 // tool-calling agent loop sees stop+tool_calls and breaks. Every executor
 // path must correct the terminal marker.

@@ -37,15 +37,10 @@ func authFileNameFor(sa *storedAuth) string {
 	if sa != nil {
 		if uid := sanitizeUIDForFileName(sa.Account.UID); uid != "" {
 			// Split-channel build (issue #29): the registered id already
-			// encodes the realm (codebuddy-cn / codebuddy-intl) — no infix,
-			// or the file would be "codebuddy-intl-intl-<uid>.json".
+			// encodes the channel — no infix,
+			// or the file would carry a doubled channel segment.
 			if providerName != "workbuddy" {
 				return providerName + "-" + uid + ".json"
-			}
-			// Intl accounts (merged codebuddy-intl) keep a region-qualified name
-			// so they never collide with a CN/Global account of the same uid.
-			if isIntlDomain(sa.Auth.Domain) {
-				return "workbuddy-intl-" + uid + ".json"
 			}
 			return "workbuddy-" + uid + ".json"
 		}

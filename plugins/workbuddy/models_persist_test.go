@@ -90,21 +90,21 @@ func TestPersistedSnapshotServedOnDiscoveryFailure(t *testing.T) {
 
 // TestPersistedSnapshotPeerFallbackSameRealmOnly proves the peer scan never
 // crosses the realm boundary: a CN credential may fall back to a CN peer's
-// snapshot, never to an Intl/Global one, and vice versa (v0.12.18 boundary
+// snapshot, never to a Global one, and vice versa (v0.12.18 boundary
 // — different gateways advertise different model ids).
 func TestPersistedSnapshotPeerFallbackSameRealmOnly(t *testing.T) {
 	resetDynamicModelsCache()
 	defer resetDynamicModelsCache()
 
 	cnDoc := mustPersistCache(t, persistTestStorage("tok-peer-cn", "cn", ""), "cn", "2026-09-27T01:00:00Z", realmTestModels("m-cn-peer"))
-	intlDoc := mustPersistCache(t, persistTestStorage("tok-peer-intl", "intl", ""), "intl", "2026-09-27T01:00:00Z", realmTestModels("m-intl-peer"))
+	globalDoc := mustPersistCache(t, persistTestStorage("tok-peer-global", "global", ""), "global", "2026-09-27T01:00:00Z", realmTestModels("m-global-peer"))
 
 	orig := discoverModelsFn
 	discoverModelsFn = func(accessToken, realm, uid string) ([]pluginapi.ModelInfo, error) {
 		return nil, errors.New("down")
 	}
 	defer func() { discoverModelsFn = orig }()
-	restore := stubPersistSeams(t, map[string][]byte{"cn": cnDoc, "intl": intlDoc})
+	restore := stubPersistSeams(t, map[string][]byte{"cn": cnDoc, "global": globalDoc})
 	defer restore()
 
 	cnAsk := persistTestStorage("tok-ask-cn", "cn", "")
@@ -112,10 +112,10 @@ func TestPersistedSnapshotPeerFallbackSameRealmOnly(t *testing.T) {
 	if len(gotCN) != 1 || gotCN[0].ID != "m-cn-peer" {
 		t.Fatalf("cn ask: want cn peer snapshot, got %+v", gotCN)
 	}
-	intlAsk := persistTestStorage("tok-ask-intl", "intl", "")
-	gotIntl := fetchDynamicModelsFromStorage(intlAsk)
-	if len(gotIntl) != 1 || gotIntl[0].ID != "m-intl-peer" {
-		t.Fatalf("intl ask: want intl peer snapshot, got %+v", gotIntl)
+	globalAsk := persistTestStorage("tok-ask-global", "global", "")
+	gotGlobal := fetchDynamicModelsFromStorage(globalAsk)
+	if len(gotGlobal) != 1 || gotGlobal[0].ID != "m-global-peer" {
+		t.Fatalf("global ask: want global peer snapshot, got %+v", gotGlobal)
 	}
 }
 

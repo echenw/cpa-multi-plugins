@@ -37,11 +37,11 @@ func TestPersistLoginCredentialCanonicalName(t *testing.T) {
 		Account: storedAccount{UID: "100200", Nickname: "cn-acct"},
 	}
 	persistLoginCredential(cn)
-	intl := &storedAuth{
-		Auth:    storedTokens{AccessToken: "tok-intl", Domain: "codebuddy.ai", Region: "intl"},
-		Account: storedAccount{UID: "100200", Nickname: "intl-acct"},
+	global := &storedAuth{
+		Auth:    storedTokens{AccessToken: "tok-global", Domain: "workbuddy.ai", Region: "global"},
+		Account: storedAccount{UID: "100200", Nickname: "global-acct"},
 	}
-	persistLoginCredential(intl)
+	persistLoginCredential(global)
 
 	if len(*saves) != 2 {
 		t.Fatalf("saves = %d, want 2", len(*saves))
@@ -49,10 +49,9 @@ func TestPersistLoginCredentialCanonicalName(t *testing.T) {
 	if (*saves)[0].name != "workbuddy-100200.json" {
 		t.Errorf("cn save name = %q, want workbuddy-100200.json", (*saves)[0].name)
 	}
-	// The whole point of v0.9.44: the intl credential must NOT share the CN
-	// file — same uid, different realms, both live.
-	if (*saves)[1].name != "workbuddy-intl-100200.json" {
-		t.Errorf("intl save name = %q, want workbuddy-intl-100200.json", (*saves)[1].name)
+	// The whole point of v0.9.44: both saves land on the canonical uid name.
+	if (*saves)[1].name != "workbuddy-100200.json" {
+		t.Errorf("global save name = %q, want workbuddy-100200.json", (*saves)[1].name)
 	}
 	for i, wantUID := range []string{"100200", "100200"} {
 		sa, err := parseStored((*saves)[i].raw)
@@ -99,7 +98,7 @@ func TestToAuthDataFileNameMatchesFileLayer(t *testing.T) {
 		wantID   string
 	}{
 		{"cn uid", "copilot.tencent.com", "100200", "workbuddy-100200.json", "100200"},
-		{"intl uid region-qualified", "codebuddy.ai", "100200", "workbuddy-intl-100200.json", "100200"},
+		{"global uid", "workbuddy.ai", "100200", "workbuddy-100200.json", "100200"},
 		{"empty uid falls back to legacy", "copilot.tencent.com", "", "workbuddy.json", "workbuddy"},
 		{"nil auth", "", "", "workbuddy.json", "workbuddy"},
 	}

@@ -99,13 +99,14 @@ func TestEnsureSystemFirstCNUnchanged(t *testing.T) {
 	}
 }
 
-func TestEnsureSystemFirstIntlRealmUnchanged(t *testing.T) {
-	// Intl (codebuddy.ai) has no first-message evidence — deliberately out
-	// of scope (CHANGELOG 0.9.37); its payloads stay byte-identical.
-	sa := &storedAuth{Auth: storedTokens{Domain: "codebuddy.ai"}}
+func TestEnsureSystemFirstLegacyRealmUnchanged(t *testing.T) {
+	// A stored account from a retired realm has no first-message evidence —
+	// deliberately out of scope (CHANGELOG 0.9.37); its payloads stay
+	// byte-identical.
+	sa := &storedAuth{Auth: storedTokens{Region: "eu"}}
 	obj := map[string]any{"messages": []any{map[string]any{"role": "user", "content": "hi"}}}
 	if ensureSystemMessageInPlace(obj, sa) {
-		t.Fatal("Intl realm must not be touched by the Global-only injection")
+		t.Fatal("legacy realm must not be touched by the Global-only injection")
 	}
 }
 

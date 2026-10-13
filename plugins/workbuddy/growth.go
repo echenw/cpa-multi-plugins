@@ -17,8 +17,8 @@
 //     copilot.tencent.com returns 400 "task not completed" — that trap is
 //     exactly why the claim lives in its own helper with web headers.
 //
-// Realm gating: the growth center only exists for CN accounts. Global /
-// Intl realms have no such endpoint family upstream (wb2api gates global
+// Realm gating: the growth center only exists for CN accounts. Non-CN
+// realms have no such endpoint family upstream (wb2api gates global
 // out with the same reasoning) — taskcenter callers skip them before any
 // upstream call is made.
 package main

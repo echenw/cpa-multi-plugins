@@ -59,7 +59,7 @@ func TestBillingProxyFunc_ConfigWinsOverEnv(t *testing.T) {
 	t.Setenv("HTTP_PROXY", "")
 	t.Setenv("HTTPS_PROXY", "")
 
-	req, _ := http.NewRequest(http.MethodPost, "https://www.codebuddy.ai/v2/billing/meter/get-user-resource", nil)
+	req, _ := http.NewRequest(http.MethodPost, "https://www.workbuddy.ai/v2/billing/meter/get-user-resource", nil)
 
 	// Neither configured → nil (direct).
 	got, err := billingProxyFunc(req)

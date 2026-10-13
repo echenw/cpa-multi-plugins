@@ -59,7 +59,7 @@ func TestDisplayNoteNoResidueRegression(t *testing.T) {
 	// Re-attaching the CURRENT usage segment after the marker is correct —
 	// that is the usage writer's own live content.
 	prev := "INTL · 余410 已用0 池410 · Tok 18.7M ｜ 该账号暂未解析出额度... · 【用量】(自2026-10-03) 今日 请求228 · Tok 15.9M ｜ 该账号暂未解析出额度窗口 ｜ 累计 请求321 · 成功率46% · Tok 45.8M"
-	sa := &storedAuth{Auth: storedTokens{Domain: "www.codebuddy.ai"}, Account: storedAccount{Nickname: "swd1232"}}
+	sa := &storedAuth{Auth: storedTokens{Domain: "www.codebuddy.cn"}, Account: storedAccount{Nickname: "swd1232"}}
 	out := displayNoteWithPrev(sa, &creditsSummary{TotalRemain: 410, TotalSize: 410, PackCount: 4, Packages: []packageSummary{{Name: "Bonus Pack", Remain: 250, Size: 250}}}, false, prev)
 	base := out
 	if idx := strings.Index(out, usageSegmentMarker); idx >= 0 {
@@ -68,7 +68,10 @@ func TestDisplayNoteNoResidueRegression(t *testing.T) {
 	if strings.Contains(base, "Tok ") || strings.Contains(base, "该账号暂未解析出额度") || strings.Contains(base, "｜") {
 		t.Fatalf("base note still carries usage residue: %q", base)
 	}
-	if !strings.HasPrefix(base, "INTL · 余410 已用0 池410") {
+	// The legacy INTL prefix in prev is stripped (safe-reader fallback) and
+	// the note is rebuilt with the current CN prefix; the live credit
+	// segment itself must survive.
+	if !strings.HasPrefix(base, "CN · 余410 已用0 池410") {
 		t.Fatalf("displayNoteWithPrev lost the live credit segment: %q", base)
 	}
 }

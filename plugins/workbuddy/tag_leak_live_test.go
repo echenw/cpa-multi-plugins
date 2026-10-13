@@ -19,7 +19,7 @@
 //	             failure here means the scrubber is not wired, not that the
 //	             model misbehaved.
 //
-// Realm caveat: the stored credential is Intl (www.codebuddy.ai); the
+// Realm caveat: the stored credential is Global (www.workbuddy.ai); the
 // reporter's account is CN. The #31 probe already showed both gateways share
 // gateway-side behavior, and the contamination is model-side (same
 // deepseek-v4.1-flash), so imitation is expected on either realm.
@@ -129,7 +129,7 @@ func TestLiveChat_TagLeak(t *testing.T) {
 	}
 	uid := os.Getenv("WB_UID")
 	sa := &storedAuth{
-		Auth:    storedTokens{AccessToken: jwt, Domain: "www.codebuddy.ai", Region: "intl", LoginPlatform: "ide"},
+		Auth:    storedTokens{AccessToken: jwt, Domain: "www.workbuddy.ai", Region: "global", LoginPlatform: "ide"},
 		Account: storedAccount{UID: uid},
 	}
 

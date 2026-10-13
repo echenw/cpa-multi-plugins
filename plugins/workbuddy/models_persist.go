@@ -14,8 +14,8 @@
 // the persisted catalog, the host registers it, and the picker has models.
 //
 // Scope guard: snapshots are per-REALM and only ever served back to
-// credentials of the SAME realm (cn/global/intl) — a CN catalog must never
-// satisfy an Intl credential's model query (v0.12.18 boundary; different
+// credentials of the SAME realm (cn/global) — a CN catalog must never
+// satisfy a Global credential's model query (v0.12.18 boundary; different
 // gateways advertise different model ids). The "merged across realms" view
 // the panel shows emerges at the host registry, which unions every
 // credential's registration.
@@ -43,7 +43,7 @@ const modelCacheDocKey = "model_cache"
 
 // persistedModelCache is the on-disk snapshot shape.
 type persistedModelCache struct {
-	// Realm the catalog was discovered under ("cn" | "global" | "intl").
+	// Realm the catalog was discovered under ("cn" | "global").
 	Realm string `json:"realm"`
 	// FetchedAt is the discovery time (RFC3339 UTC), used to pick the
 	// freshest peer snapshot when the asking credential has none of its own.

@@ -121,20 +121,20 @@ func TestIssue36_LoginPlatformPersistedIDE(t *testing.T) {
 	}
 }
 
-func TestIssue36_LoginPlatformIntlForcesIDE(t *testing.T) {
+func TestIssue36_LoginPlatformGlobalFollowsConfig(t *testing.T) {
 	_, platforms := withLoginEndpointsServer(t)
-	// Even with the CLI platform configured, the Intl entry is IDE-only.
+	// The Global entry follows the configured platform (no forced override).
 	setLoginPlatformForTest(t, "CLI")
 
-	sa := runIssue36LoginFlow(t, regionIntl)
-	if sa.Auth.LoginPlatform != "ide" {
-		t.Fatalf("intl login must force LoginPlatform=ide, got %q", sa.Auth.LoginPlatform)
+	sa := runIssue36LoginFlow(t, regionGlobal)
+	if sa.Auth.LoginPlatform != "CLI" {
+		t.Fatalf("global login must persist LoginPlatform=CLI, got %q", sa.Auth.LoginPlatform)
 	}
-	if len(*platforms) != 1 || (*platforms)[0] != "ide" {
-		t.Fatalf("intl auth/state must be requested for the ide platform, got %v", *platforms)
+	if len(*platforms) != 1 || (*platforms)[0] != "CLI" {
+		t.Fatalf("global auth/state must be requested for the CLI platform, got %v", *platforms)
 	}
-	if sa.Auth.Region != regionIntl {
-		t.Fatalf("intl login must pin Region=intl, got %q", sa.Auth.Region)
+	if sa.Auth.Region != regionGlobal {
+		t.Fatalf("global login must pin Region=global, got %q", sa.Auth.Region)
 	}
 }
 

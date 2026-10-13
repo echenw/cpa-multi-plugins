@@ -52,7 +52,7 @@ func hostAuthList() ([]pluginapi.HostAuthFileEntry, error) {
 	//
 	// v0.9.43: the accepted-name set is now isOurFamilyFileName — the
 	// SAME predicate handleParseAuth uses to claim files. The previous
-	// inline prefix list (workbuddy- / codebuddy-cn- / codebuddy-intl-)
+	// inline prefix list (workbuddy- / codebuddy-)
 	// missed the legacy single-account names (workbuddy.json /
 	// codebuddy.json), so a credential saved under a legacy name — the
 	// UID-less-login fallback — was claimed by parse yet permanently
@@ -90,10 +90,12 @@ func foreignAuthOwner(entryType, entryProvider string) (bool, string) {
 		t = strings.ToLower(strings.TrimSpace(entryProvider))
 	}
 	switch t {
-	case "", "workbuddy", "workbuddy-cn", "workbuddy-global", "workbuddy-intl",
-		"codebuddy", "codebuddy-cn", "codebuddy-intl":
+	case "", "workbuddy", "codebuddy":
 		return false, ""
 	default:
+		if strings.HasPrefix(t, "workbuddy-") || strings.HasPrefix(t, "codebuddy-") {
+			return false, ""
+		}
 		return true, t
 	}
 }

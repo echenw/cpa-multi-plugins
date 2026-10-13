@@ -23,17 +23,17 @@ import (
 // Historical note (v0.9.33, 2026-09-22): this file previously carried
 // hand-maintained per-realm static catalogs — CN: glm-5.2/glm-5.1/glm-5v-turbo,
 // kimi-k2.7, minimax-m3, hy3/hy3-preview/hy3-preview-agent, hy4-preview,
-// deepseek-v4-pro/deepseek-v4-flash/deepseek-v4.1-flash; Intl/Global:
+// deepseek-v4-pro/deepseek-v4-flash/deepseek-v4.1-flash; Global:
 // hy4-preview. Upstream retires and renames model ids without notice: the
 // hy3 family was retired upstream on 2026-09-22 while the static catalog
 // still advertised it, producing host-level "unknown provider" 400s that no
 // plugin log could explain. Static catalogs are gone on purpose —
 // advertisement mirrors discovery only, chat passes the client's model id
-// through verbatim, and models_cn / models_intl / models_global config pins
+// through verbatim, and models_cn / models_global config pins
 // remain the explicit user override.
 
 // pinnedModelsForRealm returns the ModelInfo list pinned via config_yaml
-// models_cn / models_global / models_intl for this realm, or nil. Pinned
+// models_cn / models_global for this realm, or nil. Pinned
 // lists are authoritative: they replace discovery for that realm entirely,
 // so the credential output is exactly the user-written "supported models"
 // list (the v0.12.19 formalization of writing supported models into the
@@ -110,7 +110,7 @@ func extractAccountUID(raw []byte) string {
 
 // fetchDynamicModelsFromStorage resolves ONE credential's advertised model
 // list, in priority order:
-//  1. the realm's pinned config (models_cn / models_global / models_intl) —
+//  1. the realm's pinned config (models_cn / models_global) —
 //     the user-written "supported models" list, which also skips discovery;
 //  2. per-realm dynamic discovery: fresh answer > today's cache > stale
 //     cache (v0.12.18; stale-on-failure since v0.12.71);
@@ -199,7 +199,7 @@ func fetchDynamicModelsFromStorageInner(storageJSON []byte) []pluginapi.ModelInf
 // source — the answer to "why does this realm list these models".
 // v0.9.25: Learned carries the alias→real model ids observed in chat
 // response echoes, so the panel can show which concrete model backs each
-// Intl tier alias.
+// legacy tier alias.
 type realmModelsState struct {
 	Source     string            `json:"source"`
 	Count      int               `json:"count"`
@@ -295,8 +295,8 @@ func realmModelStateFor(realm string) *realmModelsState {
 }
 
 // cachedDynamicModels returns the cached discovery result for ONE realm.
-// v0.12.18: the cache is keyed by realm (cn|global|intl) — a single shared
-// entry let a CN discovery answer satisfy model.for_auth for an Intl account
+// v0.12.18: the cache is keyed by realm (cn|global) — a single shared
+// entry let a CN discovery answer satisfy model.for_auth for a Global account
 // (and vice versa), advertising models the account's gateway never served.
 func cachedDynamicModels(realm string) ([]pluginapi.ModelInfo, bool) {
 	dynamicModelsCache.RLock()
@@ -332,11 +332,13 @@ func storeDynamicModels(realm string, models []pluginapi.ModelInfo) {
 }
 
 // realmForStorage classifies an auth storage blob into its upstream realm
-// ("cn" | "global" | "intl"). Model discovery and the 11102 error hint both
+// ("cn" | "global"). Model discovery and the 11102 error hint both
 // need the realm, but callers only have the raw storage JSON: plugin OAuth
 // files are the nested {auth:{domain,region,...}} shape, credentials imported
 // through the CPA manager UI may be flat {domain}/{region}, and legacy files
-// carry neither — for those the JWT iss decides (Global vs CN).
+// carry neither — for those the JWT iss decides (Global vs CN). Blobs
+// carrying any other stored region value resolve to "cn" (the safe routing
+// default); display keeps them verbatim via panelRegion, never here.
 func realmForStorage(raw []byte, accessToken string) string {
 	var probe struct {
 		Auth struct {
@@ -364,8 +366,6 @@ func realmForStorage(raw []byte, accessToken string) string {
 // when neither field identifies a realm (empty/legacy files).
 func realmFromRegionDomain(region, domain string) string {
 	switch strings.ToLower(strings.TrimSpace(region)) {
-	case "intl":
-		return "intl"
 	case "global":
 		return "global"
 	case "cn":
@@ -374,9 +374,6 @@ func realmFromRegionDomain(region, domain string) string {
 	d := strings.ToLower(strings.TrimSpace(domain))
 	if isGlobalDomain(d) {
 		return "global"
-	}
-	if isIntlDomain(d) {
-		return "intl"
 	}
 	return ""
 }
@@ -427,13 +424,11 @@ func isGlobalToken(accessToken string) bool {
 }
 
 // modelsEndpointFor returns the per-realm model-discovery URL and the
-// Origin/Referer base for it. Realm keys: "cn" | "global" | "intl".
+// Origin/Referer base for it. Realm keys: "cn" | "global".
 func modelsEndpointFor(realm string) (modelsURL, origin string) {
 	switch realm {
 	case "global":
 		return upstreamBaseGlobal + "/console/enterprises/personal/models", originRefererGlobal
-	case "intl":
-		return upstreamBaseIntl + "/console/enterprises/personal/models", originRefererIntl
 	default:
 		return endpointModels, originReferer
 	}
@@ -444,24 +439,24 @@ func modelsEndpointFor(realm string) (modelsURL, origin string) {
 // identity-split reality:
 //   - enterprise: GET the account's registration table (cli agent list gives
 //     ordering, data.models the capabilities). Ordering authority. v0.9.35:
-//     global/intl try the /v2 path family first (measured 200 with the
+//     global tries the /v2 path family first (measured 200 with the
 //     complete table; /console is the same-domain legacy path that may 500)
-//     and fall back to /console — see enterpriseEndpointCandidates.
+//     and falls back to /console — see enterpriseEndpointCandidates.
 //   - v3/config: the official IDE configuration catalog — UA-sensitive. The
 //     gateway splits it by client identity and each identity carries models
 //     the other lacks (2026-09-22 measurement on workbuddy.ai,
 //     workbuddy2api-panel client.go: IDE UA → 10 chat with o4-mini /
 //     enhance-1.0 / auto-chat and no deepseek series; CLI UA → 22 chat with
 //     deepseek-v4.1-flash / -sg / gpt-6-astra / kimi-k2.8-preview and none
-//     of those aliases). v0.9.35: global/intl probe BOTH identities
-//     concurrently and union the rosters — IDE roster field-authoritative,
+//     of those aliases). v0.9.35: global probes BOTH identities
+//     concurrently and unions the rosters — IDE roster field-authoritative,
 //     CLI roster only fills ids. cn stays IDE-UA single-probe.
 //
 // All probes run concurrently with independent failure handling: one
 // path's failure degrades to the rest (warn logged), only a total failure
 // fails the call with all reasons. Realm semantics unchanged
-// (v0.12.18): Global tokens query workbuddy.ai, Intl (codebuddy.ai)
-// tokens query codebuddy.ai, CN tokens query copilot.tencent.com.
+// (v0.12.18): Global tokens query workbuddy.ai,
+// CN tokens query copilot.tencent.com.
 func callModelsAPI(accessToken string, realm ...string) ([]pluginapi.ModelInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -537,15 +532,15 @@ func callModelsAPI(accessToken string, realm ...string) ([]pluginapi.ModelInfo, 
 }
 
 // enterpriseEndpointCandidates returns the enterprise catalog URLs to probe
-// in order, plus the shared Origin/Referer base. global/intl try the /v2
+// in order, plus the shared Origin/Referer base. global tries the /v2
 // path family first — workbuddy2api-panel (global_models.go
 // globalModelsProbePaths) measured /v2/enterprises/personal/models answering
 // 200 with the complete model table while /console is the same-domain legacy
-// path that may 500 — and fall back to /console; cn keeps its measured
+// path that may 500 — and falls back to /console; cn keeps its measured
 // /console-only sequence.
 func enterpriseEndpointCandidates(realm string) (urls []string, origin string) {
 	url, origin := modelsEndpointFor(realm)
-	if realm == "global" || realm == "intl" {
+	if realm == "global" {
 		v2 := strings.Replace(url, "/console/enterprises/", "/v2/enterprises/", 1)
 		return []string{v2, url}, origin
 	}
@@ -584,14 +579,6 @@ func fetchEnterpriseCatalog(ctx context.Context, accessToken, realm, modelsURL, 
 	req.Header.Set("Origin", origin)
 	req.Header.Set("Referer", origin+"/")
 	req.Header.Set("User-Agent", clientUA)
-	if realm == "intl" {
-		// The Intl gateway expects the IDE client header set (parity with
-		// applyRealmHeaders on the billing path).
-		req.Header.Set("X-IDE-Type", "IDE")
-		req.Header.Set("X-IDE-Name", "CodeBuddy")
-		req.Header.Set("X-IDE-Version", "1.100.0")
-		req.Header.Set("X-Product-Version", "1.100.0")
-	}
 	resp, err := hostHTTPDo(req)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", modelsURL, err)
@@ -660,7 +647,7 @@ func fetchEnterpriseCatalog(ctx context.Context, accessToken, realm, modelsURL, 
 // auto-chat present, no deepseek series) vs CLI UA → 22 chat models
 // (deepseek-v4.1-flash / deepseek-v4.1-flash-sg / gpt-6-astra /
 // kimi-k2.8-preview present, none of those aliases). Each identity carries
-// models the other lacks, so global/intl discovery probes BOTH and unions
+// models the other lacks, so global discovery probes BOTH and unions
 // the rosters (v3ProbeUAsFor). The version must track upstream IDE
 // releases; stale versions may serve a reduced table (workbuddy2api-panel
 // reference detail).
@@ -679,13 +666,13 @@ const v3ConfigUA = "CodeBuddyIDE/4.12.0 CodeBuddy/4.12.0"
 const v3ConfigCLIUA = "CLI/2.63.2 CodeBuddy/2.63.2"
 
 // v3ProbeUAsFor returns the /v3/config User-Agents to probe for one realm,
-// in merge order (first = field-authoritative). global/intl probe both
+// in merge order (first = field-authoritative). global probes both
 // identities — each carries exclusive models; cn stays IDE-UA single-probe
 // (the CN catalog already surfaces the real families through the
 // enterprise endpoint, the CN identity split is unmeasured, and
 // workbuddy2api-panel keeps CN single-probe too).
 func v3ProbeUAsFor(realm string) []string {
-	if realm == "global" || realm == "intl" {
+	if realm == "global" {
 		return []string{v3ConfigUA, v3ConfigCLIUA}
 	}
 	return []string{v3ConfigUA}
@@ -722,13 +709,11 @@ func buildV3ConfigRequest(ctx context.Context, endpoint, domain, accessToken, ui
 }
 
 // v3ConfigEndpointFor returns the /v3/config URL per realm. Same bases as
-// the model endpoints; realm keys: "cn" | "global" | "intl".
+// the model endpoints; realm keys: "cn" | "global".
 func v3ConfigEndpointFor(realm string) string {
 	switch realm {
 	case "global":
 		return upstreamBaseGlobal + "/v3/config"
-	case "intl":
-		return upstreamBaseIntl + "/v3/config"
 	default:
 		return upstreamBaseCN + "/v3/config"
 	}
@@ -739,8 +724,6 @@ func v3ConfigDomainFor(realm string) string {
 	switch realm {
 	case "global":
 		return strings.TrimPrefix(originRefererGlobal, "https://")
-	case "intl":
-		return strings.TrimPrefix(originRefererIntl, "https://")
 	default:
 		return strings.TrimPrefix(upstreamBaseCN, "https://")
 	}
@@ -1032,20 +1015,20 @@ func modelsFromDiscovery(dataModels []discoveredModel, cliModelIDs []string) []p
 // v0.9.12: also surface the token budgets (both endpoint generations'
 // field names) and the reasoning effort controls into Thinking.Levels/
 // ZeroAllowed.
-// intlAliasDisplayNames maps the opaque tier aliases codebuddy.ai (Intl)
-// returns from its discovery endpoints onto friendlier display names.
+// legacyTierAliasDisplayNames maps the opaque tier aliases the retired realm
+// returned from its discovery endpoints onto friendlier display names.
 // The alias IS the routable upstream id — chat requests send it verbatim —
 // but it is a product-tier label, not a model-family name, and upstream does
 // not publish which real model backs each tier (the limited-free "deepseek
-// flash" of 2026-09, if exposed on Intl, hides behind one of these).
+// flash" of 2026-09, if exposed on that realm, hides behind one of these).
 // Field report 2026-09-20 (initial): fast-model / auto-chat /
 // balanced-model / default-model all surface as bare ids; o4-mini is a
 // genuine model id and stays untouched.
-// Field report 2026-09-20 (v0.9.25 user panel): the Intl discovery now also
-// returns primary-model / deep-model / enhance-1.0 — same opaque tier-alias
-// family, same annotation treatment. Any id NOT in this map is assumed real
-// and never annotated.
-var intlAliasDisplayNames = map[string]string{
+// Field report 2026-09-20 (v0.9.25 user panel): that realm's discovery now
+// also returns primary-model / deep-model / enhance-1.0 — same opaque
+// tier-alias family, same annotation treatment. Any id NOT in this map is
+// assumed real and never annotated.
+var legacyTierAliasDisplayNames = map[string]string{
 	"fast-model":     "Fast Model（上游别名）",
 	"auto-chat":      "Auto Chat（上游别名）",
 	"balanced-model": "Balanced Model（上游别名）",
@@ -1055,14 +1038,14 @@ var intlAliasDisplayNames = map[string]string{
 	"enhance-1.0":    "Enhance 1.0（上游别名）",
 }
 
-// intlLearnedReal maps an Intl tier alias to the REAL upstream model id
+// legacyLearnedReal maps a legacy tier alias to the REAL upstream model id
 // observed in chat-completion responses (the `model` echo field). The alias
 // is what upstream routable-wise accepts, but the response echo names the
 // concrete model that actually served the request — evidence no static table
 // could ever have (v0.9.19 concluded "upstream does not publish which real
 // model backs each tier"; learning it from live traffic closes that gap).
 // Populated by noteLearnedRealModel from the executor's response paths.
-var intlLearnedReal sync.Map // alias (lowercase) -> string real model id
+var legacyLearnedReal sync.Map // alias (lowercase) -> string real model id
 
 // noteLearnedRealModel records alias→real evidence from one completed chat
 // response. Guards: only tier aliases participate; a missing/self/alias
@@ -1070,25 +1053,25 @@ var intlLearnedReal sync.Map // alias (lowercase) -> string real model id
 func noteLearnedRealModel(requestedModel, respModel string) {
 	alias := strings.ToLower(strings.TrimSpace(requestedModel))
 	real := strings.TrimSpace(respModel)
-	if _, ok := intlAliasDisplayNames[alias]; !ok {
+	if _, ok := legacyTierAliasDisplayNames[alias]; !ok {
 		return // not a tier alias — nothing to learn
 	}
 	if real == "" || strings.EqualFold(real, alias) {
 		return // echo missing or self-referential
 	}
-	if _, ok := intlAliasDisplayNames[strings.ToLower(real)]; ok {
+	if _, ok := legacyTierAliasDisplayNames[strings.ToLower(real)]; ok {
 		return // alias echoing another alias — still no real id
 	}
-	if prev, ok := intlLearnedReal.Load(alias); ok && prev.(string) == real {
+	if prev, ok := legacyLearnedReal.Load(alias); ok && prev.(string) == real {
 		return // already learned
 	}
-	intlLearnedReal.Store(alias, real)
-	log.Printf("models: intl alias %q served by upstream model %q (learned from chat response echo)", alias, real)
+	legacyLearnedReal.Store(alias, real)
+	log.Printf("models: tier alias %q served by upstream model %q (learned from chat response echo)", alias, real)
 }
 
 // learnedRealModel returns the real model id learned for an alias, or "".
 func learnedRealModel(alias string) string {
-	if v, ok := intlLearnedReal.Load(strings.ToLower(strings.TrimSpace(alias))); ok {
+	if v, ok := legacyLearnedReal.Load(strings.ToLower(strings.TrimSpace(alias))); ok {
 		return v.(string)
 	}
 	return ""
@@ -1097,7 +1080,7 @@ func learnedRealModel(alias string) string {
 // learnedRealSnapshot copies the learned alias→real map (diagnostics only).
 func learnedRealSnapshot() map[string]string {
 	out := map[string]string{}
-	intlLearnedReal.Range(func(k, v any) bool {
+	legacyLearnedReal.Range(func(k, v any) bool {
 		out[k.(string)] = v.(string)
 		return true
 	})
@@ -1144,9 +1127,9 @@ func discoverToInfo(m discoveredModel) pluginapi.ModelInfo {
 	if info.Name == "" {
 		info.Name = info.ID
 	}
-	// Annotate known Intl tier aliases only when upstream gave no richer
+	// Annotate known legacy tier aliases only when upstream gave no richer
 	// display name (Name==ID means the discovery row carried the bare id).
-	if d, ok := intlAliasDisplayNames[strings.ToLower(info.ID)]; ok && (info.Name == "" || info.Name == info.ID) {
+	if d, ok := legacyTierAliasDisplayNames[strings.ToLower(info.ID)]; ok && (info.Name == "" || info.Name == info.ID) {
 		info.Name = d
 	}
 	if m.SupportsImages && !m.DisabledMultimodal {
@@ -1415,8 +1398,8 @@ func applyExcludedSet(models []pluginapi.ModelInfo, excluded []string) []plugina
 }
 
 // filterExcludedModelsForRealm adds the realm sub-key on top of the
-// provider-key filter (v0.9.39): "workbuddy-cn" / "workbuddy-global" /
-// "workbuddy-intl" manage one channel each from the panel's global
+// provider-key filter (v0.9.39): "workbuddy-cn" / "workbuddy-global"
+// manage one channel each from the panel's global
 // oauth-excluded-models page (any key present in config shows up in the
 // page's provider dropdown), while the bare "workbuddy" key keeps excluding
 // across every realm. Empty realm (no credential context) degrades to the
@@ -1443,7 +1426,7 @@ func handleModelStatic(raw []byte) ([]byte, error) {
 	// upstream on 2026-09-22 while static tables still advertised it, which
 	// surfaced as host-level "unknown provider" 400s no plugin log could
 	// explain. All advertisement flows through model.for_auth discovery;
-	// models_cn / models_intl / models_global pins remain the explicit
+	// models_cn / models_global pins remain the explicit
 	// user override.
 	return okEnvelope(pluginapi.ModelResponse{Provider: providerName, Models: []pluginapi.ModelInfo{}})
 }

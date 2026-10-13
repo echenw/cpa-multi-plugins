@@ -54,7 +54,7 @@ func TestLiveChat_CodexIntroSanitized(t *testing.T) {
 	}
 	uid := os.Getenv("WB_UID")
 	sa := &storedAuth{
-		Auth:    storedTokens{AccessToken: jwt, Domain: "www.codebuddy.ai", Region: "intl", LoginPlatform: "ide"},
+		Auth:    storedTokens{AccessToken: jwt, Domain: "www.workbuddy.ai", Region: "global", LoginPlatform: "ide"},
 		Account: storedAccount{UID: uid},
 	}
 

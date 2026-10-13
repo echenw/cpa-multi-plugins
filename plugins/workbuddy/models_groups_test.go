@@ -87,14 +87,6 @@ func TestModelGroupsSnapshotAggregation(t *testing.T) {
 	if gGL.Count != 1 || gGL.Models[0].ID != "m-gl-1" {
 		t.Fatalf("global group wrong: %+v", gGL.Models)
 	}
-
-	gIN := groups["intl"]
-	if gIN.Count != 0 || !gIN.NeedsRefresh {
-		t.Fatalf("intl should be empty + needs_refresh, got count=%d needs=%v", gIN.Count, gIN.NeedsRefresh)
-	}
-	if !strings.Contains(gIN.Note, "刷新") {
-		t.Fatalf("intl note should hint refresh, got %q", gIN.Note)
-	}
 }
 
 // TestModelGroupsRefresh pins ?refresh=1: the live discovery answer takes

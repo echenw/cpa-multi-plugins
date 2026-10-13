@@ -4,22 +4,22 @@ import "testing"
 
 // TestSplitBuildPinWiring verifies the split-channel build injection chain:
 // config-file region switching is deleted, so the login realm always
-// resolves from the request (default intl) regardless of the build-time pin.
+// resolves from the request (default global) regardless of the build-time pin.
 // Run once WITHOUT ldflags (unified flavor: pin empty) and once WITH
 //
-//	go test -ldflags "-X main.pluginVariantPin=intl" -run TestSplitBuildPinWiring
+//	go test -ldflags "-X main.pluginVariantPin=cn" -run TestSplitBuildPinWiring
 //
-// (split flavor: the pin is a validated no-op, the login default stays intl).
+// (split flavor: the pin is a validated no-op, the login default stays global).
 func TestSplitBuildPinWiring(t *testing.T) {
 	switch pluginVariantPin {
-	case "", "cn", "intl":
+	case "", "cn":
 		applyVariantPin()
 		got, err := resolveRequestLoginRegion([]byte(`{}`))
 		if err != nil {
 			t.Fatalf("resolve: %v", err)
 		}
-		if got != regionIntl {
-			t.Fatalf("pin=%q: default login realm = %q, want %q", pluginVariantPin, got, regionIntl)
+		if got != regionGlobal {
+			t.Fatalf("pin=%q: default login realm = %q, want %q", pluginVariantPin, got, regionGlobal)
 		}
 	default:
 		t.Fatalf("invalid pin %q leaked through", pluginVariantPin)
@@ -27,11 +27,11 @@ func TestSplitBuildPinWiring(t *testing.T) {
 }
 
 // TestSplitAuthFileName pins the split-build credential namespace: the
-// registered id already encodes the realm, so no intl infix may be appended.
+// registered id already encodes the channel, so no extra infix may be appended.
 func TestSplitAuthFileName(t *testing.T) {
 	if providerName == "workbuddy" {
-		if got := authFileNameFor(&storedAuth{Account: storedAccount{UID: "u1"}, Auth: storedTokens{Domain: "www.codebuddy.ai"}}); got != "workbuddy-intl-u1.json" {
-			t.Fatalf("unified intl file = %q", got)
+		if got := authFileNameFor(&storedAuth{Account: storedAccount{UID: "u1"}, Auth: storedTokens{Domain: "www.workbuddy.ai"}}); got != "workbuddy-u1.json" {
+			t.Fatalf("unified global file = %q", got)
 		}
 		return
 	}

@@ -334,7 +334,7 @@ func checkinOneAccount(f pluginapi.HostAuthFileEntry) map[string]any {
 		return out
 	}
 	if ciErr == nil && ci != nil && !ci.Active {
-		// No check-in plan upstream (intl/trial accounts etc.). Calling
+		// No check-in plan upstream (trial accounts etc.). Calling
 		// daily-checkin anyway would surface the raw business error
 		// "没有签到计划" to the panel, which reads like a failure
 		// (2026-09-02 user report). Surface a clean skip instead — mirrors
@@ -367,7 +367,7 @@ func checkinOneAccount(f pluginapi.HostAuthFileEntry) map[string]any {
 		if strings.Contains(msg, "签到计划") || strings.Contains(low, "no checkin plan") ||
 			strings.Contains(low, "no check-in plan") {
 			// Upstream explicitly says there is no check-in plan for this
-			// account (intl/trial) — same presentation as the Active gate
+			// account (trial) — same presentation as the Active gate
 			// above so the panel never shows a raw business error.
 			out["skipped"] = true
 			out["reason"] = "inactive"

@@ -11,7 +11,7 @@ import (
 // also be seen when the host sends the config as a flow-style mapping or
 // JSON — neither of which the line-scan can match. Config-file login region
 // switching is deleted: a login_region key is ignored and the login realm
-// always resolves from the request (default intl).
+// always resolves from the request (default global).
 
 func wbConfigureWire(t *testing.T, cfg string) {
 	t.Helper()
@@ -52,20 +52,20 @@ func TestWorkbuddyConfigureStickyLoginPlatform(t *testing.T) {
 
 func TestWorkbuddyConfigureLoginRegionIgnored(t *testing.T) {
 	// A login_region key in any serialization style must not move the login
-	// realm: resolution is request-only with an intl default.
+	// realm: resolution is request-only with a global default.
 	for _, cfg := range []string{
-		"enabled: true\nlogin_region: intl\npriority: 0\n",
+		"enabled: true\nlogin_region: global\npriority: 0\n",
 		"enabled: true\nlogin_region: cn\npriority: 0\n",
-		"{enabled: true, login_region: intl, priority: 0}\n",
-		`{"enabled":true,"login_region":"intl"}`,
+		"{enabled: true, login_region: global, priority: 0}\n",
+		`{"enabled":true,"login_region":"global"}`,
 	} {
 		wbConfigureWire(t, cfg)
 		got, err := resolveRequestLoginRegion([]byte(`{}`))
 		if err != nil {
 			t.Fatalf("cfg %q: resolve: %v", cfg, err)
 		}
-		if got != regionIntl {
-			t.Fatalf("cfg %q: default login realm = %q, want intl", cfg, got)
+		if got != regionGlobal {
+			t.Fatalf("cfg %q: default login realm = %q, want global", cfg, got)
 		}
 	}
 }

@@ -10,7 +10,7 @@ import (
 )
 
 // Config-file region switching is deleted: there is no stored selection to
-// pin in tests. Login realm comes from the request only (default intl).
+// pin in tests. Login realm comes from the request only (default global).
 
 func decodeWBLoginState(t *testing.T, out []byte) string {
 	t.Helper()
@@ -25,7 +25,7 @@ func decodeWBLoginState(t *testing.T, out []byte) string {
 	return start.State
 }
 
-func TestRequestLoginRegionDefaultsIntl(t *testing.T) {
+func TestRequestLoginRegionDefaultsGlobal(t *testing.T) {
 	_, platforms := withLoginEndpointsServer(t)
 
 	out, err := handleStartLogin([]byte(`{}`))
@@ -38,11 +38,11 @@ func TestRequestLoginRegionDefaultsIntl(t *testing.T) {
 		t.Fatal("login state not stored")
 	}
 	defer loginStates.Delete(state)
-	if lc := v.(*loginCtx); lc.region != regionIntl {
-		t.Fatalf("login-state region = %q, want intl", lc.region)
+	if lc := v.(*loginCtx); lc.region != regionGlobal {
+		t.Fatalf("login-state region = %q, want global", lc.region)
 	}
-	if len(*platforms) != 1 || (*platforms)[0] != "ide" {
-		t.Fatalf("platforms = %v, want [ide] for the intl entry", *platforms)
+	if len(*platforms) != 1 || (*platforms)[0] != "CLI" {
+		t.Fatalf("platforms = %v, want [CLI] for the default global entry", *platforms)
 	}
 }
 
@@ -69,10 +69,10 @@ func TestRequestLoginRegionExplicitCN(t *testing.T) {
 	}
 }
 
-func TestRequestLoginRegionExplicitIntl(t *testing.T) {
+func TestRequestLoginRegionExplicitGlobal(t *testing.T) {
 	_, _ = withLoginEndpointsServer(t)
 
-	for _, raw := range []string{`{"region":"intl"}`, `{"login_region":"intl"}`, `{"variant":"intl"}`, `{}`} {
+	for _, raw := range []string{`{"region":"global"}`, `{"login_region":"global"}`, `{"variant":"global"}`, `{}`} {
 		out, err := handleStartLogin([]byte(raw))
 		if err != nil {
 			t.Fatalf("handleStartLogin %s: %v", raw, err)
@@ -83,14 +83,14 @@ func TestRequestLoginRegionExplicitIntl(t *testing.T) {
 			t.Fatal("login state not stored")
 		}
 		loginStates.Delete(state)
-		if lc := v.(*loginCtx); lc.region != regionIntl {
-			t.Fatalf("raw %s: login-state region = %q, want intl", raw, lc.region)
+		if lc := v.(*loginCtx); lc.region != regionGlobal {
+			t.Fatalf("raw %s: login-state region = %q, want global", raw, lc.region)
 		}
 	}
 }
 
 func TestRequestLoginRegionIllegalRejected(t *testing.T) {
-	for _, raw := range []string{`{"region":"eu"}`, `{"login_region":"global"}`, `{"variant":"us"}`} {
+	for _, raw := range []string{`{"region":"eu"}`, `{"login_region":"xx"}`, `{"variant":"us"}`} {
 		if _, err := handleStartLogin([]byte(raw)); err == nil {
 			t.Fatalf("raw %q: want explicit rejection, got nil", raw)
 		} else if !strings.Contains(err.Error(), "invalid login region") {
@@ -106,8 +106,8 @@ func TestExistingAccountRealmsUnchanged(t *testing.T) {
 	if got := realmForStorage([]byte(`{"auth":{"domain":"copilot.tencent.com"}}`), ""); got != "cn" {
 		t.Fatalf("cn account realm = %q", got)
 	}
-	if got := realmForStorage([]byte(`{"auth":{"region":"intl"}}`), ""); got != "intl" {
-		t.Fatalf("intl account realm = %q", got)
+	if got := realmForStorage([]byte(`{"auth":{"region":"eu"}}`), ""); got != "cn" {
+		t.Fatalf("unknown stored region must resolve cn for routing, got %q", got)
 	}
 	if got := realmForStorage([]byte(`{"auth":{"region":"global"}}`), ""); got != "global" {
 		t.Fatalf("global account realm = %q", got)
@@ -180,7 +180,7 @@ func callLoginStartEndpoint(t *testing.T, body string) (int, map[string]any) {
 	return resp.StatusCode, payload
 }
 
-func TestManagementLoginStartDefaultIntl(t *testing.T) {
+func TestManagementLoginStartDefaultGlobal(t *testing.T) {
 	_, _ = withLoginEndpointsServer(t)
 
 	for _, body := range []string{`{}`, ``} {
@@ -189,8 +189,8 @@ func TestManagementLoginStartDefaultIntl(t *testing.T) {
 		if status != http.StatusOK {
 			t.Fatalf("body %q: status = %d, payload=%v", body, status, payload)
 		}
-		if payload["region"] != regionIntl {
-			t.Fatalf("body %q: region = %v, want intl", body, payload["region"])
+		if payload["region"] != regionGlobal {
+			t.Fatalf("body %q: region = %v, want global", body, payload["region"])
 		}
 		url, _ := payload["auth_url"].(string)
 		if url == "" {
@@ -224,7 +224,7 @@ func TestManagementLoginStartInvalid(t *testing.T) {
 	_, _ = withLoginEndpointsServer(t)
 
 	before := countLoginStates()
-	for _, body := range []string{`{"region":"eu"}`, `{"login_region":"global"}`, `{"variant":"us"}`} {
+	for _, body := range []string{`{"region":"eu"}`, `{"login_region":"xx"}`, `{"variant":"us"}`} {
 		status, payload := callLoginStartEndpoint(t, body)
 		if status != http.StatusBadRequest {
 			t.Fatalf("body %q: status = %d, want 400 (payload=%v)", body, status, payload)

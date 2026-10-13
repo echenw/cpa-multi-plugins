@@ -83,14 +83,9 @@ const (
 	// Global chat/auth gateway (iss = workbuddy.ai realm). APISIX on
 	// copilot.tencent.com rejects Global JWTs with 401; must use workbuddy.ai.
 	upstreamBaseGlobal = "https://www.workbuddy.ai"
-	// Intl chat/auth gateway (merged codebuddy-intl plugin, v0.11.0):
-	// the codebuddy.ai realm issues its own JWTs — separate from both
-	// copilot.tencent.com and workbuddy.ai.
-	upstreamBaseIntl    = "https://www.codebuddy.ai"
 	clientUA            = "CLI/2.108.1 CodeBuddy/2.108.1"
 	originReferer       = "https://www.codebuddy.cn"
 	originRefererGlobal = "https://www.workbuddy.ai"
-	originRefererIntl   = "https://www.codebuddy.ai"
 
 	// CN endpoint aliases (login / chat / models). upstreamBaseCN is the only
 	// CN base; Global has its own upstreamBaseGlobal. No "upstreamBase" legacy
@@ -110,9 +105,9 @@ const (
 // so we must reuse the same cookie jar across the state request and the polls.
 type loginCtx struct {
 	client *http.Client
-	region string // login realm: cn | intl (merged codebuddy-intl)
+	region string // login realm: cn | global
 	// platform 记录该次登录实际使用的客户端平台（CLI/ide，issue #36）：
-	// Intl 入口只有 IDE 客户端，CN 入口跟 login_platform 配置。成功后写进
+	// 登录入口跟 login_platform 配置。成功后写进
 	// sa.Auth.LoginPlatform，让 token 血统（哪个客户端族铸造）与后续聊天的
 	// 请求方言（头族）一致——不持久化的话 IDE 流程铸造的 token 会以 CLI
 	// 头族聊天，正是 #26/#38 类错配在 workbuddy 的镜像。
@@ -365,10 +360,9 @@ func wbRegistration() registration {
 				{Name: "lifecycle_auto", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Auto disable CN / delete Global when credits exhausted; re-enable CN after check-in restores credits (default true)."},
 				{Name: "token_keepalive", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Enable daily access-token refresh at 22:00 local time to prevent Keycloak offline-session expiry (default true)."},
 			{Name: "login_platform", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{"CLI", "ide"}, Description: "Client variant used for NEW logins: CLI (WorkBuddy, default) or ide (CodeBuddy IDE). Existing accounts keep the platform recorded at login/import time."},
-				{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Description: "Optional model list. Each item can have id, name, alias, context, max_tokens, enabled, reasoning. NOTE: for realm-scoped pinning use models_cn / models_global / models_intl below."},
+				{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Description: "Optional model list. Each item can have id, name, alias, context, max_tokens, enabled, reasoning. NOTE: for realm-scoped pinning use models_cn / models_global below."},
 				{Name: "models_cn", Type: pluginapi.ConfigFieldTypeString, Description: "Leave empty (recommended): each CN account then supports exactly what copilot.tencent.com returns for its credential token (5-min cache). Optional comma-separated upstream model IDs to pin/override the CN model output."},
 				{Name: "models_global", Type: pluginapi.ConfigFieldTypeString, Description: "Leave empty (recommended): each Global account then supports exactly what workbuddy.ai returns for its credential token (5-min cache). Optional comma-separated upstream model IDs to pin/override the Global model output."},
-				{Name: "models_intl", Type: pluginapi.ConfigFieldTypeString, Description: "Leave empty (recommended): each Intl account then supports exactly what codebuddy.ai returns for its credential token (5-min cache) - no pre-filled guessing, so unsupported models are never advertised or routed. Optional comma-separated upstream model IDs to pin/override the Intl model output."},
 				{Name: "scheduler_mode", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{schedulerModeOff, schedulerModeCredits, schedulerModeSession}, Description: "Multi-account selection: off (defer to built-in, default), credits (panel-selected account) or session (per-conversation sticky routing, same key stays on one account up to 1h). WARNING: when off + lifecycle_auto=false, exhausted accounts may still be routed — enable lifecycle_auto or set scheduler_mode=credits."},
 				{Name: "stream_head_timeout", Type: pluginapi.ConfigFieldTypeInteger, Description: "Opt-in async-stream head gate, in seconds (default 0 = disabled, unchanged behavior). When > 0 the executor waits up to this long for the first decisive upstream event before opening the host stream, so a pre-answer failure (upstream >=400 or an error frame before the model starts answering) returns as a normal failed request with an HTTP status instead of a lossy in-band text error. Never blocks longer than this, and a silent stream is released normally."},
 				{Name: "usage_report_url", Type: pluginapi.ConfigFieldTypeString, Description: "Optional override of CPAMP usage import URL (default http://cpa-manager-plus:18317/v0/management/usage/import; also env USAGE_REPORT_URL)."},
@@ -399,7 +393,7 @@ const dynamicModelsCacheTTL = 5 * time.Minute
 // realmModelsEntry is one realm's cached discovery result plus the v0.9.9
 // diagnostics trail: WHERE the advertised list came from (discovery / pin /
 // static fallback), when it was fetched, and why discovery failed last time.
-// v0.12.18: the cache is keyed by realm (cn|global|intl) — a single shared
+// v0.12.18: the cache is keyed by realm (cn|global) — a single shared
 // entry let one realm's answer (or CN-flavored static fallback) satisfy
 // model.for_auth for accounts on another realm, advertising models their
 // gateway never served. Error-only entries (models nil) are cache misses for
@@ -465,8 +459,9 @@ type storedTokens struct {
 	// (workbuddy login) or "ide" (CodeBuddy IDE login). Empty means legacy
 	// CLI-style (no X-IDE-* headers), matching historical workbuddy files.
 	LoginPlatform string `json:"loginPlatform,omitempty"`
-	// Region records which realm produced the token: "cn" (copilot.tencent.com),
-	// "intl" (codebuddy.ai IDE client) or "global" (workbuddy.ai panel import).
+	// Region records which realm produced the token: "cn" (copilot.tencent.com)
+	// or "global" (workbuddy.ai panel import). Older builds may have stored
+	// other values; those keep listing via panelRegion's verbatim fallback.
 	// Empty = legacy file — accountRegion falls back to domain sniffing.
 	Region string `json:"region,omitempty"`
 }
@@ -562,9 +557,6 @@ func originRefererFor(sa *storedAuth) string {
 		if isGlobalDomain(sa.Auth.Domain) {
 			return originRefererGlobal
 		}
-		if isIntlDomain(sa.Auth.Domain) {
-			return originRefererIntl
-		}
 	}
 	return originReferer
 }
@@ -581,9 +573,6 @@ func upstreamBaseFor(sa *storedAuth) string {
 	if sa != nil {
 		if isGlobalDomain(sa.Auth.Domain) {
 			return upstreamBaseGlobal
-		}
-		if isIntlDomain(sa.Auth.Domain) {
-			return upstreamBaseIntl
 		}
 	}
 	return upstreamBaseCN
@@ -606,13 +595,11 @@ func endpointModelsFor(sa *storedAuth) string {
 func backendHeaders(req *http.Request, sa *storedAuth) {
 	commonHeaders(req)
 	applyPlatformHeaders(req, platformForAuth(sa))
-	applyRealmHeaders(req, sa)
 	// v0.9.29 (fork libo0118/qoder-custom review): the official WorkBuddy
 	// 5.5.6 desktop's bundled CLI sends these identity headers on chat calls;
 	// without them the official usage history's client column stays blank for
 	// CLI-login accounts. Only the blank case is filled — the adopted
-	// CodeBuddyIDE (platform=="ide") and Intl realm overrides above keep
-	// their existing values.
+	// CodeBuddyIDE (platform=="ide") values above keep their existing values.
 	if req.Header.Get("X-IDE-Name") == "" {
 		req.Header.Set("X-IDE-Name", "WorkBuddy")
 		req.Header.Set("X-IDE-Type", "WorkBuddy")
@@ -661,13 +648,13 @@ func backendHeaders(req *http.Request, sa *storedAuth) {
 // handleParseAuth).
 func isOurFamilyFileName(name string) bool {
 	lower := strings.ToLower(strings.TrimSpace(name))
-	for _, p := range []string{providerName + "-", "codebuddy-cn-", "codebuddy-intl-"} {
+	for _, p := range []string{providerName + "-", "workbuddy-", "codebuddy-"} {
 		if strings.HasPrefix(lower, p) {
 			return true
 		}
 	}
 	switch lower {
-	case "workbuddy.json", "codebuddy.json", "codebuddy-cn.json", "codebuddy-intl.json":
+	case "workbuddy.json", "codebuddy.json", "codebuddy-cn.json":
 		return true
 	}
 	return false
@@ -676,9 +663,12 @@ func isOurFamilyFileName(name string) bool {
 // isOurDeclaredType reports whether an explicitly declared auth "type"
 // belongs to this plugin's family (current name plus pre-merge names).
 func isOurDeclaredType(t string) bool {
-	switch strings.ToLower(strings.TrimSpace(t)) {
-	case "workbuddy", "workbuddy-cn", "workbuddy-global", "workbuddy-intl",
-		"codebuddy", "codebuddy-cn", "codebuddy-intl":
+	v := strings.ToLower(strings.TrimSpace(t))
+	switch v {
+	case "workbuddy", "codebuddy":
+		return true
+	}
+	if strings.HasPrefix(v, "workbuddy-") || strings.HasPrefix(v, "codebuddy-") {
 		return true
 	}
 	return false
@@ -708,7 +698,7 @@ func handleParseAuth(raw []byte) ([]byte, error) {
 	declared := strings.ToLower(strings.TrimSpace(probeType.Type))
 	if declared != "" && !isOurDeclaredType(declared) {
 		// Explicitly another provider's file — never claim it. Family-wide:
-		// pre-merge names (codebuddy/codebuddy-cn/codebuddy-intl) remain ours.
+		// pre-merge codebuddy- names remain ours.
 		return okEnvelope(pluginapi.AuthParseResponse{Handled: false})
 	}
 	if declared == "" {
@@ -774,10 +764,9 @@ func toAuthDataOptsWithNote(sa *storedAuth, cr *creditsSummary, disabled bool, p
 		}
 	}
 	// v0.9.44: the file name now comes from the SAME rule the file layer
-	// uses (authFileNameFor) — intl accounts get the region-qualified
-	// workbuddy-intl-<uid>.json here too. The previous inline "workbuddy-" +
-	// uid form defeated authFileNameFor's collision guard: an Intl login
-	// and a CN/Global login sharing one uid both landed on the same file,
+	// uses (authFileNameFor). The previous inline "workbuddy-" +
+	// uid form defeated authFileNameFor's collision guard: two logins
+	// sharing one uid both landed on the same file,
 	// the second login silently overwriting the first. With this alignment
 	// the poll-save, the plugin-side login persist, adoption, import and
 	// reconcile all agree on ONE canonical name per credential.

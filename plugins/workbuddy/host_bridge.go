@@ -47,9 +47,9 @@ func sharedHTTPClient() *http.Client {
 				MaxIdleConns:        20,
 				IdleConnTimeout:     90 * time.Second,
 				MaxIdleConnsPerHost: 5,
-				// v0.9.48b: disable HTTP/2. codebuddy.ai's APISIX gateway
-				// closes HTTP/2 connections mid-request with EOF (field report
-				// 2026-10-03: "Post ...get-user-resource: EOF" after 6.84s).
+			// v0.9.48b: disable HTTP/2. The upstream APISIX gateway
+			// closes HTTP/2 connections mid-request with EOF (field report
+			// 2026-10-03: "Post ...get-user-resource: EOF" after 6.84s).
 				// Setting TLSNextProto to a non-nil empty map disables the
 				// HTTP/2 upgrade, forcing HTTP/1.1 which APISIX handles
 				// reliably.
@@ -58,7 +58,7 @@ func sharedHTTPClient() *http.Client {
 				// host process environment. The billing path bypasses the host
 				// bridge (v0.9.49), which also bypassed every host transport
 				// policy — including the proxy. Deployments that need a proxy
-				// for cross-border reach to www.codebuddy.ai / www.workbuddy.ai
+				// for cross-border reach to www.workbuddy.ai
 				// saw every billing call die with
 				// `Post ".../get-user-resource": EOF` (direct GFW/WAF/NAT
 				// interference) while all bridge-routed traffic worked fine.
@@ -76,8 +76,8 @@ func sharedHTTPClient() *http.Client {
 type httpRescueCtxKey struct{}
 
 // httpBridgeCtxKey tags requests that must take the host bridge even when the
-// destination domain is on the direct-bypass list (codebuddy.ai /
-// workbuddy.ai). Billing exhaustion ladders use it as a fallback attempt so
+// destination domain is on the direct-bypass list (workbuddy.ai).
+// Billing exhaustion ladders use it as a fallback attempt so
 // host transport policy (config.yaml proxy-url) gets one shot even when the
 // proxy cache is still cold. The Windows stability bypass below is NOT
 // overridden by this marker.
@@ -91,7 +91,7 @@ func withHTTPRescue(ctx context.Context) context.Context {
 }
 
 // withHTTPBridge marks a request context so hostHTTPDo routes it through the
-// host bridge despite the codebuddy.ai/workbuddy.ai direct bypass.
+// host bridge despite the workbuddy.ai direct bypass.
 func withHTTPBridge(ctx context.Context) context.Context {
 	return context.WithValue(ctx, httpBridgeCtxKey{}, true)
 }
@@ -99,7 +99,7 @@ func withHTTPBridge(ctx context.Context) context.Context {
 // rescueHTTPClient is the last-resort transport for billing retries. It differs
 // from sharedHTTPClient in the two dimensions that actually break long-lived
 // pooled connections on hostile paths (field reports: repeated
-// `Post "https://www.codebuddy.ai/v2/billing/meter/get-user-resource": EOF`
+// `Post "https://<billing-host>/v2/billing/meter/get-user-resource": EOF`
 // surviving every same-path retry):
 //
 //   - DisableKeepAlives: every attempt opens a brand-new TCP+TLS connection.
@@ -217,18 +217,18 @@ func hostHTTPDo(req *http.Request) (*hostHTTPResponse, error) {
 		_ = req.Body.Close()
 		bodyBytes = b
 	}
-	// v0.9.49: force direct HTTP for codebuddy.ai billing endpoints.
+	// v0.9.49: force direct HTTP for workbuddy.ai billing endpoints.
 	// The CPA host bridge uses Go's default http.Transport which enables
-	// HTTP/2 via ALPN. The APISIX gateway on www.codebuddy.ai closes
+	// HTTP/2 via ALPN. The APISIX gateway closes
 	// HTTP/2 connections mid-request, returning EOF
-	// ("Post https://www.codebuddy.ai/v2/billing/meter/get-user-resource: EOF").
+	// ("Post https://<billing-host>/v2/billing/meter/get-user-resource: EOF").
 	// sharedHTTPClient has TLSNextProto set to disable HTTP/2 — route
 	// billing calls through it directly instead of the host bridge.
 	// v0.9.52: the withHTTPBridge marker (billing exhaustion ladder) skips
 	// this bypass so the host bridge — and with it the config.yaml
 	// proxy-url policy — gets one fallback attempt.
 	if _, forced := req.Context().Value(httpBridgeCtxKey{}).(bool); !forced {
-		if strings.Contains(req.URL.Host, "codebuddy.ai") || strings.Contains(req.URL.Host, "workbuddy.ai") {
+		if strings.Contains(req.URL.Host, "workbuddy.ai") {
 			return hostHTTPDoDirect(req, bodyBytes)
 		}
 	}
@@ -308,7 +308,7 @@ func decodeHostHTTPDoResult(result json.RawMessage) (int, http.Header, []byte, e
 
 // hostHTTPDoDirect executes the request via the plugin's own http.Client.
 // Used as a fallback when the host bridge is unavailable (unit tests), and as
-// the primary path for codebuddy.ai / workbuddy.ai endpoints (v0.9.49 — the
+// the primary path for workbuddy.ai endpoints (v0.9.49 — the
 // host bridge's default transport negotiates HTTP/2, which the APISIX gateway
 // drops mid-request). Requests carrying the withHTTPRescue context marker run
 // on rescueHTTPClient (fresh connection, tcp4-first) — billing retries use

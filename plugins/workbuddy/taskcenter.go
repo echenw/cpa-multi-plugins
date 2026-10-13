@@ -493,9 +493,9 @@ func compactGrowthJSON(raw json.RawMessage) string {
 // Management API
 // -----------------------------------------------------------------------------
 
-// tasksSupportsGrowth gates the feature by realm: CN only. Global accounts
-// have no growth center upstream; Intl (codebuddy.ai) has never exposed one
-// either (wb2api — our only protocol reference — runs CN-only for growth).
+// tasksSupportsGrowth gates the feature by realm: CN only. Non-CN accounts
+// have no growth center upstream
+// (wb2api — our only protocol reference — runs CN-only for growth).
 func tasksSupportsGrowth(sa *storedAuth) bool {
 	return sa != nil && accountRegion(sa) == "cn"
 }

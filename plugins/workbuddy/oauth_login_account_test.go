@@ -155,22 +155,22 @@ func TestHostAuthListNameFilterSymmetry(t *testing.T) {
 	// (superset guarantee), and the legacy bare names must now be listed
 	// too — handleParseAuth and hostAuthList share isOurFamilyFileName.
 	accepted := map[string]bool{
-		"workbuddy-123.json":      true,
-		"WorkBuddy-ABC.json":      true,
-		"codebuddy-cn-9.json":     true,
-		"codebuddy-intl-3.json":   true,
-		"workbuddy.json":          true, // v0.9.43: legacy bare name, no longer orphaned
-		"codebuddy.json":          true, // v0.9.43: legacy bare name
-		"codebuddy-cn.json":       true,
-		"codebuddy-intl.json":     true,
-		".trae-usage.json":        false, // manager usage snapshot, never a credential
-		"workbuddy-usage.json":    true,  // prefix-matches; rejected later by parse content, shown as broken row
-		"qoder-1.json":            false,
-		"trae-1.json":             false,
-		"workbuddy-backup":        true, // loose prefix, same as before
-		"mimo-cookie-1.json":      false,
-		"random-notes.json":       false,
-		"workbuddy-intl-x@y.json": true, // odd but family-prefixed; content guard decides
+		"workbuddy-123.json":    true,
+		"WorkBuddy-ABC.json":    true,
+		"codebuddy-cn-9.json":   true,
+		"codebuddy-eu-3.json":   true, // retired-channel name stays listed (verbatim display)
+		"workbuddy.json":        true, // v0.9.43: legacy bare name, no longer orphaned
+		"codebuddy.json":        true, // v0.9.43: legacy bare name
+		"codebuddy-cn.json":     true,
+		"codebuddy-eu.json":     true, // retired-channel bare name stays listed
+		".trae-usage.json":      false, // manager usage snapshot, never a credential
+		"workbuddy-usage.json":  true,  // prefix-matches; rejected later by parse content, shown as broken row
+		"qoder-1.json":          false,
+		"trae-1.json":           false,
+		"workbuddy-backup":      true, // loose prefix, same as before
+		"mimo-cookie-1.json":    false,
+		"random-notes.json":     false,
+		"workbuddy-eu-x@y.json": true, // odd but family-prefixed; content guard decides
 	}
 	for name, want := range accepted {
 		if got := isOurFamilyFileName(name); got != want {
@@ -180,7 +180,7 @@ func TestHostAuthListNameFilterSymmetry(t *testing.T) {
 	// The old prefix rule's acceptance set is a subset of the new predicate.
 	oldRule := func(name string) bool {
 		lower := strings.ToLower(strings.TrimSpace(name))
-		for _, p := range []string{"workbuddy-", "codebuddy-cn-", "codebuddy-intl-"} {
+		for _, p := range []string{"workbuddy-", "codebuddy-cn-", "codebuddy-eu-"} {
 			if strings.HasPrefix(lower, p) {
 				return true
 			}

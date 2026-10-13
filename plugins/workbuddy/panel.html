@@ -193,9 +193,9 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
   </div>
   <div class="bar">
     <button id="loginBtn" onclick="openLoginModal()">授权登录</button>
-    <span class="toggle" title="授权登录的目标渠道（默认 Intl）">
+    <span class="toggle" title="授权登录的目标渠道（默认 Global）">
       <button type="button" class="lreg" data-login-region="cn" onclick="pickLoginRegion('cn',this)">CN</button>
-      <button type="button" class="lreg on" data-login-region="intl" onclick="pickLoginRegion('intl',this)">Intl</button>
+      <button type="button" class="lreg on" data-login-region="global" onclick="pickLoginRegion('global',this)">Global</button>
     </span>
     <button class="sec" id="importBtn" onclick="openImportModal()">导入凭证</button>
     <button id="refreshBtn" onclick="load(true,this)">刷新数据</button>
@@ -211,7 +211,6 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
     <button type="button" class="ftag active" data-region="all" onclick="filterRegion('all',this)">全部 <span class="cnt" id="cntAll">0</span></button>
     <button type="button" class="ftag" data-region="cn" onclick="filterRegion('cn',this)">CN <span class="cnt" id="cntCn">0</span></button>
     <button type="button" class="ftag" data-region="global" onclick="filterRegion('global',this)">Global <span class="cnt" id="cntGlobal">0</span></button>
-    <button type="button" class="ftag" data-region="intl" onclick="filterRegion('intl',this)">Intl <span class="cnt" id="cntIntl">0</span></button>
     <button type="button" class="ftag" data-region="exhausted" onclick="filterRegion('exhausted',this)">耗尽 <span class="cnt" id="cntExhausted">0</span></button>
   </div>
   <div class="summary card" id="summaryBox" style="display:none"></div>
@@ -254,11 +253,11 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
       <button type="button" class="modal-x" onclick="closeLoginModal()" aria-label="关闭">×</button>
     </div>
     <div class="modal-bd">
-      <p class="hint">按步骤完成授权：先打开授权链接完成上游登录，再把浏览器回调地址粘贴回来提交。默认 <code>Intl</code>，切换渠道会重新开始登录。</p>
+      <p class="hint">按步骤完成授权：先打开授权链接完成上游登录，再把浏览器回调地址粘贴回来提交。默认 <code>Global</code>，切换渠道会重新开始登录。</p>
       <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
-        <span class="toggle">渠道（默认 Intl，切换会重新开始登录）</span>
+        <span class="toggle">渠道（默认 Global，切换会重新开始登录）</span>
         <button type="button" class="lreg" data-login-modal-region="cn" onclick="pickLoginModalRegion('cn',this)">CN</button>
-        <button type="button" class="lreg on" data-login-modal-region="intl" onclick="pickLoginModalRegion('intl',this)">Intl</button>
+        <button type="button" class="lreg on" data-login-modal-region="global" onclick="pickLoginModalRegion('global',this)">Global</button>
       </div>
       <p class="hint" style="margin-bottom:6px">步骤 1：复制授权链接并在新标签页打开（弹窗保持打开）</p>
       <div style="display:flex;gap:8px;margin-bottom:12px">
@@ -534,10 +533,10 @@ function modelsHTML(m){
   const src=m.source||"";
   let txt;
   if(src==="discovery") txt=`动态发现 ${m.count||0} 个模型${age}`;
-  else if(src.startsWith("pin")) txt=`配置钉住 ${m.count||0} 个模型（models_cn/models_global/models_intl）`;
+  else if(src.startsWith("pin")) txt=`配置钉住 ${m.count||0} 个模型（models_cn/models_global）`;
   else if(src.startsWith("static")) txt=`静态兜底 ${m.count||0} 个模型${m.last_error?` · 发现失败: ${m.last_error}`:""}`;
   else txt="等待首次模型查询";
-  // v0.9.25: runtime-learned alias→real model ids (Intl tier aliases) — the
+  // v0.9.25: runtime-learned alias→real model ids (legacy tier aliases) — the
   // answer to "which concrete model hides behind fast-model" etc.
   const learned=m.learned||null;
   const learnedKeys=learned?Object.keys(learned):[];
@@ -551,10 +550,13 @@ function card(a){
   const exhausted=!!a.exhausted||(!!cr&&(cr.total_remain||0)===0&&((cr.total_used||0)>0||(cr.total_size||0)>0||(cr.packages&&cr.packages.length)));
   const region=a.region||"cn";
   const isGlobal=region==="global";
+  const isCN=region==="cn";
   const disabled=!!a.disabled;
   const selected=!!a.selected;
-  const isIntl=region==="intl";
-  const regionBadge=`<span class="badge ${isIntl?"global":region}">${isGlobal?"Global":(isIntl?"Intl":"CN")}</span>`;
+  // Stored accounts carrying a retired region value keep listing: the badge
+  // shows the stored value verbatim and the card is visible under 全部.
+  const regionLabel=isGlobal?"Global":(isCN?"CN":region);
+  const regionBadge=`<span class="badge ${isGlobal?"global":(isCN?"cn":"disabled")}">${esc(regionLabel)}</span>`;
   // CN: 签到 button; Global: 领取专家加油包 button (or 已领取 if trial_claimed)
   let actionHTML;
   if(isGlobal){
@@ -569,7 +571,7 @@ function card(a){
     const btnText=checked?"已签到":"签到";
     const btnDisabled=checked?" disabled=\"disabled\"":"";
     actionHTML=`<button class="${btnClass}" data-action="checkin" data-auth-index="${esc(a.auth_index)}"${btnDisabled}>${btnText}</button>`;
-    if(!isIntl){
+    if(isCN){
       actionHTML+=`<button class="sec" data-action="tasks" data-auth-index="${esc(a.auth_index)}" title="任务中心：活跃上报 / 补签 / 领奖 / 猫旅行 / 连登兑换 / 抽奖">任务</button>`;
       actionHTML+=`<button class="sec" data-action="vouchers" data-auth-index="${esc(a.auth_index)}" title="开学季券码（活动期）">券码</button>`;
     }
@@ -690,9 +692,9 @@ function filterRegion(region, btn){
   renderSummary(lastAccounts);
 }
 function updateFilterCounts(accounts){
-  let cn=0, gl=0, itl=0, ex=0;
+  let cn=0, gl=0, ex=0;
   (accounts||[]).forEach(a=>{
-    const r=a.region||"cn"; if(r==="global") gl++; else if(r==="intl") itl++; else cn++;
+    const r=a.region||"cn"; if(r==="global") gl++; else if(r==="cn") cn++;
     if(a.exhausted||(a.credits&&a.credits.total_remain===0&&(a.credits.total_used>0||(a.credits.packages&&a.credits.packages.length)))) ex++;
   });
   const elAll=document.getElementById("cntAll");
@@ -701,8 +703,6 @@ function updateFilterCounts(accounts){
   const elEx=document.getElementById("cntExhausted");
   if(elAll) elAll.textContent=String((accounts||[]).length);
   if(elCn) elCn.textContent=String(cn);
-  const elItl=document.getElementById("cntIntl");
-  if(elItl) elItl.textContent=String(itl);
   if(elGl) elGl.textContent=String(gl);
   if(elEx) elEx.textContent=String(ex);
 }
@@ -753,7 +753,7 @@ function renderSummary(accounts){
   const total=size>0?size:(remain+used);
   const pct=total>0?Math.round(used/total*100):0;
   let barColor="var(--ok)"; if(pct>60)barColor="var(--warn)"; if(pct>85)barColor="var(--err)";
-  const scopeLabel=currentFilter==="all"?"全部账号":(currentFilter==="intl"?"Intl 账号":(currentFilter==="global"?"Global 账号":"CN 账号"));
+  const scopeLabel=currentFilter==="all"?"全部账号":(currentFilter==="global"?"Global 账号":(currentFilter==="exhausted"?"耗尽账号":"CN 账号"));
   const allTotal=allSize>0?allSize:(allRemain+allUsed);
   box.style.display="block";
   box.innerHTML=`
@@ -1113,7 +1113,7 @@ async function importAuth(btn){
    弹窗内步骤 1 展示只读授权链接（复制/打开链接，新标签页打开且弹窗保持），
    步骤 2 粘贴回调地址 POST /login/callback；状态行每 ~5s POST /login/poll
    直到成功（关弹窗 + load(true)）或过期（重启提示）。区域切换重新开始。 */
-let loginRegion="intl";
+let loginRegion="global";
 let loginModalState="", loginModalUrl="", loginModalTimer=null;
 function syncLoginRegionUI(){
   document.querySelectorAll("[data-login-region]").forEach(b=>b.classList.toggle("on",b.dataset.loginRegion===loginRegion));
@@ -1169,7 +1169,7 @@ async function loginModalStart(btn){
     if(!d.auth_url||!d.state){setLoginStatus("上游未返回授权链接，请点重新开始","err");return}
     loginModalState=d.state; loginModalUrl=d.auth_url;
     document.getElementById("loginAuthURL").value=d.auth_url;
-    setLoginStatus("已生成授权链接（"+(d.region||"intl")+"），按步骤 1 在新标签页完成授权");
+    setLoginStatus("已生成授权链接（"+(d.region||"global")+"），按步骤 1 在新标签页完成授权");
     scheduleLoginPoll();
   }catch(e){setLoginStatus("授权登录请求失败："+(e.message||e),"err");toast("授权登录请求失败","err",e.message)}
   finally{busy(btn,false)}

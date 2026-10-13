@@ -75,33 +75,8 @@ func loginHeaders(req *http.Request) {
 	applyPlatformHeaders(req, currentLoginPlatform())
 }
 
-// loginHeadersFor is the realm-aware login header set: Intl (codebuddy.ai)
-// logins additionally drop X-Requested-With and use the Intl IDE client
-// header values (merged codebuddy-intl plugin behavior).
-func loginHeadersFor(req *http.Request, region string) {
-	loginHeaders(req)
-	if region == regionIntl {
-		// No stored auth yet at login time, so apply the Intl client header
-		// set directly.
-		req.Header.Del("X-Requested-With")
-		req.Header.Set("X-IDE-Type", "IDE")
-		req.Header.Set("X-IDE-Name", "CodeBuddy")
-		req.Header.Set("X-IDE-Version", "1.100.0")
-		req.Header.Set("X-Product-Version", "1.100.0")
-	}
-}
-
-// authStateHeaders returns the header func for the auth/state request
-// (nil keeps the historical default: doJSON falls back to loginHeaders).
-func authStateHeaders(region string) func(*http.Request) {
-	if region != regionIntl {
-		return nil
-	}
-	return func(r *http.Request) { loginHeadersFor(r, region) }
-}
-
 // loginEndpointsOverride（issue #36 测试缝）：非空时把登录三端点
-// （auth/state、auth/token、login/account，CN 与 Intl 路径同形）重定向到该
+// （auth/state、auth/token、login/account，CN 与 Global 路径同形）重定向到该
 // base，让 hermetic 测试用 httptest 服务器驱动完整登录流（与
 // growthChatBaseOverride 同型）。生产恒为空，三个 base 解析函数在生产路径
 // 与原常量拼接字节级等价。
@@ -113,7 +88,7 @@ func loginStateBaseFor(region string) string {
 	if loginEndpointsOverride != "" {
 		return loginEndpointsOverride + "/v2/plugin/auth/state?platform="
 	}
-	if region == regionIntl {
+	if region == regionGlobal {
 		return upstreamBaseForRegion(region) + "/v2/plugin/auth/state?platform="
 	}
 	return endpointAuthStateBase
@@ -123,7 +98,7 @@ func loginTokenBaseFor(region string) string {
 	if loginEndpointsOverride != "" {
 		return loginEndpointsOverride + "/v2/plugin/auth/token?state="
 	}
-	if region == regionIntl {
+	if region == regionGlobal {
 		return upstreamBaseForRegion(region) + "/v2/plugin/auth/token?state="
 	}
 	return endpointAuthToken
@@ -133,14 +108,14 @@ func loginAccountBaseFor(region string) string {
 	if loginEndpointsOverride != "" {
 		return loginEndpointsOverride + "/v2/plugin/login/account?state="
 	}
-	if region == regionIntl {
+	if region == regionGlobal {
 		return upstreamBaseForRegion(region) + "/v2/plugin/login/account?state="
 	}
 	return endpointLoginAcct
 }
 
 func handleStartLogin(raw []byte) ([]byte, error) {
-	// Request-carried region only (default intl). Illegal values fail before
+	// Request-carried region only (default global). Illegal values fail before
 	// any network I/O.
 	region, err := resolveRequestLoginRegion(raw)
 	if err != nil {
@@ -151,23 +126,17 @@ func handleStartLogin(raw []byte) ([]byte, error) {
 
 // startLoginWithRegion starts a login flow pinned to region. The host RPC
 // entry (handleStartLogin) resolves the request-carried region (default
-// intl); there is no config fallback.
+// global); there is no config fallback.
 func startLoginWithRegion(raw []byte, region string) ([]byte, error) {
-	// Only cn/intl route; anything else is an explicit rejection (this path
+	// Only cn/global route; anything else is an explicit rejection (this path
 	// never writes config).
-	if region != regionCN && region != regionIntl {
-		return nil, fmt.Errorf("invalid login region %q: want \"cn\" or \"intl\" (default \"intl\")", region)
+	if region != regionCN && region != regionGlobal {
+		return nil, fmt.Errorf("invalid login region %q: want \"cn\" or \"global\" (default \"global\")", region)
 	}
 	client := newLoginClient()
 	platform := currentLoginPlatform()
-	headers := authStateHeaders(region)
 	stateBase := loginStateBaseFor(region)
-	if region == regionIntl {
-		// The codebuddy.ai login entry is the IDE client only (merged
-		// codebuddy-intl plugin behavior).
-		platform = "ide"
-	}
-	data, _, err := doJSON(client, http.MethodPost, stateBase+platform, headers, bytes.NewReader([]byte("{}")))
+	data, _, err := doJSON(client, http.MethodPost, stateBase+platform, nil, bytes.NewReader([]byte("{}")))
 	if err != nil {
 		return nil, fmt.Errorf("auth state failed: %w", err)
 	}
@@ -189,8 +158,8 @@ func startLoginWithRegion(raw []byte, region string) ([]byte, error) {
 }
 
 // handleLoginStart serves POST <base>/login/start for the management panel
-// authorize flow. The body may carry {region: cn|intl} (login_region /
-// variant keys are accepted too); when absent the login defaults to intl.
+// authorize flow. The body may carry {region: cn|global} (login_region /
+// variant keys are accepted too); when absent the login defaults to global.
 // Any other non-empty value is a 400 and nothing is persisted. On success it
 // returns {auth_url, region, state, expires_at}; the panel shows the URL in
 // an in-panel OAuth modal and polls POST <base>/login/poll until success.
@@ -262,11 +231,7 @@ func attemptLoginPoll(state string, lc *loginCtx) loginPollOutcome {
 	// openresty gateway and is rejected (401) until login finishes, so probe
 	// token first and only fetch account once we hold a bearer.
 	tokenBase := loginTokenBaseFor(lc.region)
-	var tokenHeaders func(*http.Request)
-	if lc.region == regionIntl {
-		tokenHeaders = func(r *http.Request) { loginHeadersFor(r, lc.region) }
-	}
-	tokRaw, status, errTok := doJSON(lc.client, http.MethodGet, tokenBase+state, tokenHeaders, nil)
+	tokRaw, status, errTok := doJSON(lc.client, http.MethodGet, tokenBase+state, nil, nil)
 	if errTok != nil {
 		// Transport-level failures and 5xx are real errors, not "still waiting":
 		// surface them so the user sees a failure instead of polling until TTL.
@@ -318,14 +283,9 @@ func attemptLoginPoll(state string, lc *loginCtx) loginPollOutcome {
 			Nickname:     acct.Nickname,
 		},
 	}
-	// Pin the realm for Intl logins whose token response omitted the domain
-	// (gateway routing depends on it).
-	if lc.region == regionIntl && strings.TrimSpace(sa.Auth.Domain) == "" {
-		sa.Auth.Domain = "codebuddy.ai"
-	}
 	// Pin the region explicitly (v0.12.15): credential-manager notes and
 	// labels resolve via accountRegion; domain sniffing is only a legacy
-	// fallback. Global accounts never go through login (panel import).
+	// fallback.
 	sa.Auth.Region = lc.region
 	// issue #36（Part 2）：登录平台血统持久化——不写这一行，IDE 流程铸造的
 	// token 在聊天时会以 CLI 头族出现（platformForAuth 回退 CLI），token
@@ -502,8 +462,8 @@ func handlePollLogin(raw []byte) ([]byte, error) {
 }
 
 // persistLoginCredential writes the just-minted login credential to the host
-// auth store under the canonical file-layer name (authFileNameFor — intl
-// accounts region-qualified). Best-effort: failures are logged and swallowed
+// auth store under the canonical file-layer name (authFileNameFor).
+// Best-effort: failures are logged and swallowed
 // because the host's post-poll save remains the primary persistence path.
 func persistLoginCredential(sa *storedAuth) {
 	raw, err := buildAuthFileJSON(sa, false, displayNoteWithPrev(sa, nil, false, ""), nil)
@@ -535,12 +495,6 @@ func fetchLoginAccountAt(client *http.Client, acctBase, region, state, accessTok
 	headers := func(r *http.Request) {
 		loginHeaders(r)
 		r.Header.Set("Authorization", "Bearer "+accessToken)
-	}
-	if region == regionIntl {
-		headers = func(r *http.Request) {
-			loginHeadersFor(r, region)
-			r.Header.Set("Authorization", "Bearer "+accessToken)
-		}
 	}
 	var acct accountData
 	var lastErr error
