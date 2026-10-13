@@ -90,7 +90,9 @@ func TestDerivedIdentityStablePerAccount(t *testing.T) {
 
 // TestDerivedIdentitySeparatesAccounts: every account gets its own device —
 // the explicit user requirement (每个账户身份不应该一样). Also across
-// variants: a solo login of the same human is a different server lineage.
+// regions: trae-cn and trae of the same uid derive different devices.
+// The retired solo spelling normalizes to trae-cn, so it shares the
+// trae-cn device (no new solo logins can mint anything else).
 func TestDerivedIdentitySeparatesAccounts(t *testing.T) {
 	alice := deriveAccountDeviceIdentity("cn", "1000000000000001")
 	bob := deriveAccountDeviceIdentity("cn", "1000000000000002")
@@ -101,8 +103,9 @@ func TestDerivedIdentitySeparatesAccounts(t *testing.T) {
 		t.Fatal("two accounts share device key material")
 	}
 	solo := deriveAccountDeviceIdentity("solo", "1000000000000001")
-	if solo.DeviceID == alice.DeviceID || solo.MachineID == alice.MachineID {
-		t.Fatalf("cn and solo of one account share a device: %s/%s", solo.DeviceID, solo.MachineID)
+	if solo.DeviceID != alice.DeviceID || solo.MachineID != alice.MachineID {
+		t.Fatalf("retired solo must share the trae-cn device (fallback), got %s/%s vs %s/%s",
+			solo.DeviceID, solo.MachineID, alice.DeviceID, alice.MachineID)
 	}
 	intl := deriveAccountDeviceIdentity("intl", "1000000000000001")
 	if intl.DeviceID == alice.DeviceID {

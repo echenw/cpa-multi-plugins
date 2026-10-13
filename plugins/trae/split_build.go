@@ -3,11 +3,11 @@
 // The repo ships TWO release packages per platform from the SAME source:
 //
 //   - cpa-multi-plugins-<os>-<arch>.zip — the unified flavor (default):
-//     one plugin per provider merging cn/intl/solo realms behind a single
-//     identifier with per-account variant config.
+//     one plugin per provider merging trae-cn/trae regions behind a single
+//     identifier with per-account region config.
 //   - cpa-multi-plugins-split-<os>-<arch>.zip — the split-channel flavor:
-//     the legacy per-variant plugins (trae-cn / trae-solo-cn / trae-intl,
-//     plus the qoder/workbuddy equivalents), each registering as its own
+//     the legacy per-region plugins (trae-cn / trae-intl, plus the
+//     qoder/workbuddy equivalents), each registering as its own
 //     panel entry with its own OAuth login pinned to its realm.
 //
 // A trae split build is produced purely at BUILD TIME — no source fork:

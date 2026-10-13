@@ -1,22 +1,22 @@
-// models_groups.go — v0.12.63: per-variant model catalog endpoint for the
+// models_groups.go — v0.12.63: per-region model catalog endpoint for the
 // panel's model-exclusion picker (GET /plugins/trae/models/groups). Port of
-// the workbuddy v0.9.40 design onto trae's cn/solo/intl variant namespaces.
+// the workbuddy v0.9.40 design onto trae's trae-cn/trae region namespaces.
 //
 // Why: the HOST's global oauth-excluded-models page cannot offer candidate
 // lists for plugin channels (model-definitions/:channel is an upstream-static
 // 8-channel catalog; unknown channels 400 "unknown channel"), so excluding a
 // trae model there meant hand-typing suffixed ids. This endpoint serves the
 // catalog from the plugin's OWN knowledge — the per-credential model_cache
-// snapshots (v0.12.63) — grouped by variant namespace, and the panel renders
-// per-variant checkboxes that write the host's trae-<variant> sub-keys via
+// snapshots (v0.12.63) — grouped by region namespace, and the panel renders
+// per-region checkboxes that write the host's trae region sub-keys via
 // PATCH /v0/management/oauth-excluded-models. Consumption stays
 // host-config-shaped (models_exclusion.go), so the global page and this
 // picker drive the SAME exclusion map — no parallel truth, nothing
 // plugin-proprietary to persist.
 //
 // Read-only by default: groups are served from the newest model_cache
-// snapshot per variant (zero upstream calls). ?refresh=1 additionally runs
-// one live discovery per variant through the credential's own for_auth chain
+// snapshot per region (zero upstream calls). ?refresh=1 additionally runs
+// one live discovery per region through the credential's own for_auth chain
 // (refresh → discover → snapshot → static), which also re-stamps the
 // snapshot — so what the picker shows and what the runtime advertises cannot
 // diverge. Excluded models stay listed (the snapshot is pre-exclusion), so
@@ -31,23 +31,19 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
-// modelGroupVariantOrder is the fixed presentation order; a variant with
+// modelGroupVariantOrder is the fixed presentation order; a region with
 // zero credentials still renders (empty group) so the picker shows every
 // channel.
-var modelGroupVariantOrder = []string{"cn", "solo", "intl"}
+var modelGroupVariantOrder = []string{variantCN, variantIntl}
 
-// modelGroupVariantLabel renders the human-facing variant title. Keep in sync
+// modelGroupVariantLabel renders the human-facing region title. Keep in sync
 // with the panel badges.
 func modelGroupVariantLabel(variant string) string {
-	switch variant {
-	case "cn":
-		return "CN（trae.cn）"
-	case "solo":
-		return "Solo CN（trae.cn SOLO）"
-	case "intl":
-		return "Intl（trae.ai）"
+	switch normalizeVariant(variant) {
+	case variantIntl:
+		return "trae（trae.ai）"
 	default:
-		return variant
+		return "trae cn（trae.cn）"
 	}
 }
 
@@ -76,7 +72,7 @@ type modelGroupsResponse struct {
 	Hint   string       `json:"hint"`
 }
 
-// variantCatalogEntry is one credential's contribution to a variant catalog scan.
+// variantCatalogEntry is one credential's contribution to a region catalog scan.
 type variantCatalogEntry struct {
 	variant  string
 	hasToken bool
@@ -101,8 +97,11 @@ func handleModelGroupsQuery(req pluginapi.ManagementRequest) (int, any) {
 		if err != nil || len(phys) == 0 {
 			continue
 		}
-		// hostAuthListFn already filtered foreign owners; variant resolution
-		// mirrors persistedSnapshotForStorage's same-variant guard.
+		// hostAuthListFn already filtered foreign owners; region resolution
+		// mirrors persistedSnapshotForStorage's same-region guard.
+		// sniffVariantFromJSON normalizes, so stored solo spellings land in
+		// the trae-cn group (their stale "solo"-realm snapshots are ignored
+		// by the guard and re-stamped on the next live refresh).
 		variant := sniffVariantFromJSON(phys)
 		e := &variantCatalogEntry{
 			variant:  variant,
@@ -110,7 +109,7 @@ func handleModelGroupsQuery(req pluginapi.ManagementRequest) (int, any) {
 			name:     f.Name,
 			storage:  phys,
 		}
-		if c := readModelCacheDoc(phys); c != nil && c.Realm == variant {
+		if c := readModelCacheDoc(phys); c != nil && sameSnapshotRealm(c.Realm, variant) {
 			e.snapshot = c
 		}
 		perVariant[variant] = append(perVariant[variant], e)
@@ -126,10 +125,10 @@ func handleModelGroupsQuery(req pluginapi.ManagementRequest) (int, any) {
 	}
 }
 
-// buildModelGroup resolves one variant's catalog: newest same-variant
+// buildModelGroup resolves one region's catalog: newest same-region
 // snapshot first; with refresh=1 a live discovery (via the credential's
 // for_auth chain) takes precedence and re-stamps the snapshot. Never serves
-// a cross-variant snapshot.
+// a cross-region snapshot.
 func buildModelGroup(variant string, entries []*variantCatalogEntry, refresh bool) modelGroup {
 	g := modelGroup{
 		Realm:       variant,
@@ -203,8 +202,8 @@ func pickRefreshCredential(entries []*variantCatalogEntry) *variantCatalogEntry 
 }
 
 // refreshVariantCatalog runs ONE live discovery for the picked credential
-// through the exact path model.for_auth uses (intl credentials ride the
-// intl chain, cn/solo the solo_work_lite lane) — pre-exclusion, so the
+// through the exact path model.for_auth uses (trae credentials ride the
+// intl chain, trae-cn the solo_work_lite lane) — pre-exclusion, so the
 // picker can also un-exclude.
 func refreshVariantCatalog(pick *variantCatalogEntry) []pluginapi.ModelInfo {
 	if pick == nil || len(pick.storage) == 0 {

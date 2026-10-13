@@ -1,14 +1,17 @@
 // adopt.go migrates legacy trae-cn / trae-solo-cn / trae-intl auth files to
-// the merged trae provider (v0.12.0).
+// the merged trae provider.
 //
-// The three legacy plugins ran against DIFFERENT upstreams (api.trae.cn
-// inline_chat, api.trae.cn solo_work_lite, api.marscode.com chat_sessions),
-// so there is NO dedupe across them. Filenames are KEPT — trae-cn-<uid>.json,
+// The legacy plugins ran against DIFFERENT upstreams, so there is NO dedupe
+// across them. Filenames are KEPT — trae-cn-<uid>.json,
 // trae-solo-cn-<uid>.json and trae-intl-<uid>.json all carry the canonical
 // "trae-" prefix — and only the JSON type/provider is rewritten in place:
 //
 //	type/provider: trae-cn | trae-solo-cn | trae-intl → trae
-//	auth.variant:  cn | solo | intl (derived from the filename)
+//	auth.variant:  trae-cn-<uid>.json → "trae-cn"; trae-intl-* untouched
+//	                (the intl parser reads it via sniffVariantFromJSON);
+//	                trae-solo-cn-* untouched (retired solo: the raw "solo"
+//	                spelling stays so the panel keeps the verbatim SOLO
+//	                badge, while normalizeVariant routes it to trae-cn).
 //
 // The host routes auth files to plugins by the file's type field, so without
 // this rewrite legacy files would be orphaned. Idempotent, 1-minute guard,
@@ -62,12 +65,14 @@ func startAdoption() {
 	}()
 }
 
-// legacyTraeVariant maps a legacy file name to its variant ("" = not legacy).
+// legacyTraeVariant maps a legacy file name to its region ("" = not legacy).
+// The retired trae-solo-cn namespace maps to retiredVariantSolo: adopt still
+// rewrites its type/provider (host routing), but never injects a variant.
 func legacyTraeVariant(name string) string {
 	lower := strings.ToLower(strings.TrimSpace(name))
 	switch {
 	case strings.HasPrefix(lower, "trae-solo-cn-"), lower == "trae-solo-cn.json":
-		return variantSolo
+		return retiredVariantSolo
 	case strings.HasPrefix(lower, "trae-intl-"), lower == "trae-intl.json":
 		return variantIntl
 	case strings.HasPrefix(lower, "trae-cn-"), lower == "trae-cn.json":
@@ -114,10 +119,13 @@ func adoptForeignAuths() bool {
 		if strings.EqualFold(strings.TrimSpace(probe.Type), providerName) {
 			continue // already canonical
 		}
-		// For cn/solo files, refresh the variant field inside the nested auth
+		// For trae-cn files, refresh the variant field inside the nested auth
 		// object so auth.Parse picks it up. Intl files keep their native shape
-		// (the intl parser reads it via sniffVariantFromJSON).
-		if variant != variantIntl {
+		// (the intl parser reads it via sniffVariantFromJSON). Retired solo
+		// files keep their stored variant untouched (safe-reader: the raw
+		// "solo" spelling drives the verbatim SOLO badge; routing falls
+		// back to trae-cn via normalizeVariant).
+		if variant != variantIntl && variant != retiredVariantSolo {
 			raw = injectVariant(raw, variant)
 			if raw == nil {
 				continue

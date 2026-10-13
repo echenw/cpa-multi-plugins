@@ -1,8 +1,8 @@
-// models_persist.go — v0.12.63: persist each variant's last successful model
+// models_persist.go — v0.12.63: persist each region's last successful model
 // discovery INTO the credential files themselves (top-level "model_cache"
 // key), so the last-known-good catalog survives host restarts and upstream
-// outages. Port of the workbuddy v0.9.38 design onto trae's cn/solo/intl
-// variant namespaces.
+// outages. Port of the workbuddy v0.9.38 design onto trae's trae-cn/trae
+// region namespaces.
 //
 // Why: modelsForVariant / intlhandleModelForAuth have exactly one fallback —
 // the compiled-in static catalogs. Those are guesses frozen at release time;
@@ -12,14 +12,17 @@
 // touching the static guess.
 //
 // Snapshot semantics: the persisted list is the ADVERTISED catalog — ids
-// already carry the variant suffix ("-solo"/"-intl") and the Intl virtuals
+// already carry the region suffix ("-intl" for trae) and the Intl virtuals
 // (auto/work) — because exclusions and host routing both key on the
 // advertised id. The list is PRE-exclusion, so excluded models stay visible
 // in the picker and un-excluding never needs an upstream round-trip.
 //
-// Scope guard: snapshots are per-VARIANT and only ever served back to
-// credentials of the SAME variant — a cn catalog must never satisfy a solo
-// or intl credential (different namespaces, suffixed ids).
+// Scope guard: snapshots are per-REGION and only ever served back to
+// credentials of the SAME region — a trae-cn catalog must never satisfy a
+// trae credential (different namespaces, suffixed ids). Legacy pre-B-plan
+// realms ("cn" → trae-cn, "intl" → trae) stay readable via
+// sameSnapshotRealm; the retired "solo" realm never serves (its ids carry
+// the deleted "-solo" namespace).
 //
 // Write hygiene: every host.auth.save re-fires the watcher → model.for_auth.
 // persistModelSnapshot therefore writes ONLY when the discovered list
@@ -68,8 +71,9 @@ var preservedPluginDocKeys = []string{
 
 // persistedModelCache is the on-disk snapshot shape.
 type persistedModelCache struct {
-	// Realm is the variant namespace the catalog was discovered under
-	// ("cn" | "solo" | "intl").
+	// Realm is the region namespace the catalog was discovered under
+	// ("trae-cn" | "trae"; legacy "cn" / "intl" stay readable, retired
+	// "solo" never serves).
 	Realm string `json:"realm"`
 	// FetchedAt is the discovery time (RFC3339 UTC), used to pick the
 	// freshest peer snapshot when the asking credential has none of its own.
@@ -107,11 +111,24 @@ func readModelCacheDoc(doc []byte) *persistedModelCache {
 	return c
 }
 
+// sameSnapshotRealm reports whether a stored snapshot realm may serve an
+// asking region: exact match, or a legacy pre-B-plan spelling of the same
+// region ("cn" → trae-cn, "intl" → trae). The retired "solo" realm never
+// serves — its ids carry the deleted "-solo" model namespace.
+func sameSnapshotRealm(stored, asking string) bool {
+	if stored == asking {
+		return true
+	}
+	// Legacy pre-B-plan spellings of the same region.
+	return (stored == "cn" && asking == variantCN) ||
+		(stored == "intl" && asking == variantIntl)
+}
+
 // persistedSnapshotForStorage resolves the last persisted snapshot for the
-// asking credential's variant: its own document first, then the freshest
-// same-variant peer document. Cross-variant snapshots are never served.
+// asking credential's region: its own document first, then the freshest
+// same-region peer document. Cross-region snapshots are never served.
 func persistedSnapshotForStorage(storageJSON []byte, variant string) ([]pluginapi.ModelInfo, bool) {
-	if snap := readModelCacheDoc(storageJSON); snap != nil && snap.Realm == variant {
+	if snap := readModelCacheDoc(storageJSON); snap != nil && sameSnapshotRealm(snap.Realm, variant) {
 		return snap.Models, true
 	}
 	files, err := hostAuthListFn()
@@ -125,7 +142,7 @@ func persistedSnapshotForStorage(storageJSON []byte, variant string) ([]pluginap
 			continue
 		}
 		c := readModelCacheDoc(phys)
-		if c == nil || c.Realm != variant {
+		if c == nil || !sameSnapshotRealm(c.Realm, variant) {
 			continue
 		}
 		if best == nil || persistedFetchedAt(c) > persistedFetchedAt(best) {
@@ -156,7 +173,7 @@ func persistModelSnapshot(storageJSON []byte, variant string, models []pluginapi
 		log.Printf("models: variant=%s snapshot persist skipped — credential file not located", variant)
 		return
 	}
-	if existing := readModelCacheDoc(doc); existing != nil && existing.Realm == variant && samePersistedModels(existing.Models, models) {
+	if existing := readModelCacheDoc(doc); existing != nil && sameSnapshotRealm(existing.Realm, variant) && samePersistedModels(existing.Models, models) {
 		// Unchanged — a save here would re-fire the watcher → model.for_auth
 		// for zero information. This guard is what makes the write loop
 		// converge.
@@ -181,7 +198,7 @@ func persistModelSnapshot(storageJSON []byte, variant string, models []pluginapi
 // locateCredentialFile matches the asking credential to its file by access
 // token — the only stable identifier that survives both storage shapes
 // (nested trae-*.json and flat CPA-panel imports) and every naming scheme
-// (trae-<uid>, trae-solo-cn-<uid>, trae-intl-<uid>).
+// (trae-<uid>, trae-cn-<uid>, trae-intl-<uid>, trae-solo-cn-<uid>).
 func locateCredentialFile(storageJSON []byte) (name string, doc []byte, ok bool) {
 	tok := extractTraeAccessToken(storageJSON)
 	if strings.TrimSpace(tok) == "" {

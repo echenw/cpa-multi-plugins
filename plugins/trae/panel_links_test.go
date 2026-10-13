@@ -19,8 +19,8 @@ func TestPanelNoDeadIntlSwitchLink(t *testing.T) {
 	if strings.Contains(string(panelHTML), `href="intl_panel"`) {
 		t.Errorf("unified panel still carries the dead self-alias switch link (click = reload)")
 	}
-	if !strings.Contains(string(panelHTML), "INTL 徽标") {
-		t.Errorf("unified panel must explain where Intl accounts live, got no muted note")
+	if !strings.Contains(string(panelHTML), "trae 徽标") {
+		t.Errorf("unified panel must explain where trae accounts live, got no muted note")
 	}
 }
 
@@ -51,8 +51,8 @@ func TestPanelTitleSymmetry(t *testing.T) {
 	}
 }
 
-// Unified spec (b)+(d): top action row order — 授权登录 (loginBtn + CN/Intl
-// toggle default Intl) → 导入凭证 (importBtn) → 刷新数据 (refreshBtn) →
+// Unified spec (b)+(d): top action row order — 授权登录 (loginBtn + trae cn/trae
+// toggle default trae) → 导入凭证 (importBtn) → 刷新数据 (refreshBtn) →
 // 全部签到 → 模型禁用.
 func TestPanelTopBarOrder(t *testing.T) {
 	html := string(panelHTML)
@@ -74,13 +74,13 @@ func TestPanelTopBarOrder(t *testing.T) {
 		}
 		prev = i
 	}
-	// The CN/Intl toggle next to 授权登录 defaults to Intl (.lreg.on on Intl,
+	// The trae cn/trae toggle next to 授权登录 defaults to trae (.lreg.on on trae,
 	// in both the bar and the modal copies).
 	for _, want := range []string{
-		`class="lreg on" data-login-region="intl"`,
-		`class="lreg on" data-login-modal-region="intl"`,
-		`class="lreg" data-login-region="cn"`,
-		`class="lreg" data-login-modal-region="cn"`,
+		`class="lreg on" data-login-region="trae"`,
+		`class="lreg on" data-login-modal-region="trae"`,
+		`class="lreg" data-login-region="trae-cn"`,
+		`class="lreg" data-login-modal-region="trae-cn"`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("login region toggle must carry %q", want)
@@ -121,7 +121,7 @@ func TestPanelSingleLoginEntry(t *testing.T) {
 // wired to an in-panel OAuth modal with the unified element-id conventions
 // (loginModal / loginModalTitle=授权登录 / loginAuthURL + copy +
 // open-in-new-tab-stays-open / loginCallbackURL + submit / loginStatus
-// polling + close-safe note + .lreg CN/Intl toggles defaulting to Intl).
+// polling + close-safe note + .lreg trae cn/trae toggles defaulting to trae).
 // The legacy intl_panel.html (split-binary trae-intl deployments only) stays
 // untouched.
 func TestPanelAuthorizeLoginUI(t *testing.T) {
@@ -190,17 +190,18 @@ func TestPanelImportEndpointRegistered(t *testing.T) {
 }
 
 // Unified spec (f): filter pills — the .ftag component, order
-// 全部 → CN → SOLO → Intl → 耗尽 with counts. The realm set kept is trae's
-// real one (cn / solo / Intl from variant routing + card variants) — nothing
-// invented. Cards carry data-variant for the filter.
+// 全部 → trae cn → trae → 耗尽 with counts. The pill set is trae's real
+// one (trae-cn / trae region filters + exhausted); the retired SOLO pill
+// is gone, while stored solo accounts keep their verbatim SOLO card badge
+// (visible under 全部). Cards carry data-variant for the filter.
 func TestPanelFilterPills(t *testing.T) {
 	html := string(panelHTML)
 	if !strings.Contains(html, `class="filter-bar"`) {
 		t.Fatalf("unified panel must carry the .filter-bar pill row")
 	}
 	marks := []string{
-		`data-region="all"`, `data-region="cn"`, `data-region="solo"`,
-		`data-region="intl"`, `data-region="exhausted"`,
+		`data-region="all"`, `data-region="trae-cn"`,
+		`data-region="trae"`, `data-region="exhausted"`,
 	}
 	prev := -1
 	for _, m := range marks {
@@ -213,10 +214,20 @@ func TestPanelFilterPills(t *testing.T) {
 		}
 		prev = i
 	}
+	for _, gone := range []string{
+		`data-region="solo"`, `data-region="cn"`, `data-region="intl"`,
+		`id="cntSolo"`,
+	} {
+		if strings.Contains(html, gone) {
+			t.Errorf("retired region pill remnant must be gone: %q", gone)
+		}
+	}
 	for _, want := range []string{
-		`id="cntAll"`, `id="cntCn"`, `id="cntSolo"`, `id="cntIntl"`, `id="cntExhausted"`,
+		`id="cntAll"`, `id="cntCn"`, `id="cntIntl"`, `id="cntExhausted"`,
 		"filterRegion(", "updateFilterCounts(", `data-variant="${variant}"`,
 		`class="ftag active" data-region="all"`,
+		// Safe-reader UI: stored solo accounts keep the verbatim SOLO badge.
+		`>SOLO</span>`,
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("filter pills must carry %q", want)

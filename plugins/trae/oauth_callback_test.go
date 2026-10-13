@@ -54,15 +54,16 @@ func TestSniffVariantIntlNestedMarkers(t *testing.T) {
 	if got := sniffVariantFromJSON(nestedWebID); got != variantIntl {
 		t.Fatalf("nested webId sniffed as %q, want intl", got)
 	}
-	// Explicit variant always wins.
+	// Explicit variant always wins — except the retired solo spelling,
+	// which falls back to the trae-cn route (safe-reader).
 	explicitSolo := []byte(`{"auth":{"variant":"solo","tenant":"marscode"}}`)
-	if got := sniffVariantFromJSON(explicitSolo); got != variantSolo {
-		t.Fatalf("explicit solo sniffed as %q, want solo", got)
+	if got := sniffVariantFromJSON(explicitSolo); got != variantCN {
+		t.Fatalf("explicit solo sniffed as %q, want trae-cn fallback", got)
 	}
-	// Plain CN file stays CN.
+	// Plain trae-cn file stays trae-cn.
 	cn := []byte(`{"auth":{"accessToken":"a","machineId":"m","deviceId":"d"}}`)
 	if got := sniffVariantFromJSON(cn); got != variantCN {
-		t.Fatalf("cn sniffed as %q, want cn", got)
+		t.Fatalf("cn sniffed as %q, want trae-cn", got)
 	}
 	// Legacy top-level markers (old trae-intl files) still recognized.
 	legacy := []byte(`{"webId":"w","tenant":"t","userIdentity":"u"}`)
@@ -148,9 +149,9 @@ func TestHandleParseAuthWireBase64(t *testing.T) {
 	}
 }
 
-func TestHandleOAuthCallbackResourceCNSolo(t *testing.T) {
+func TestHandleOAuthCallbackResourceCN(t *testing.T) {
 	state := "test-state-cn-1234"
-	lc := &loginCtx{variant: variantSolo, state: state, expires: time.Now().Add(time.Minute)}
+	lc := &loginCtx{variant: variantCN, state: state, expires: time.Now().Add(time.Minute)}
 	loginStates.Store(state, lc)
 	defer loginStates.Delete(state)
 

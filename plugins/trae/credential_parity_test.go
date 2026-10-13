@@ -38,7 +38,8 @@ func TestCredentialParityFieldsSoloCN(t *testing.T) {
 	if authExtras["refreshExpiredAt"] != int64(1804206273) {
 		t.Errorf("refreshExpiredAt=%v want 1804206273 (ms→s)", authExtras["refreshExpiredAt"])
 	}
-	// Echo overrides for region/host.
+	// Echo overrides for region/host (the live fixture echo carries the
+	// pre-B-plan "cn" spelling — echo wins over the trae-cn default).
 	if authExtras["host"] != "https://api.trae.cn" || authExtras["loginHost"] != "https://api.trae.cn" {
 		t.Errorf("host/loginHost echo wrong: %v / %v", authExtras["host"], authExtras["loginHost"])
 	}
@@ -82,25 +83,27 @@ func TestCredentialParityFieldsNoEcho(t *testing.T) {
 		}
 	}
 	// CN defaults still apply.
-	if authExtras["loginRegion"] != "cn" || authExtras["storeRegion"] != "CN" {
+	if authExtras["loginRegion"] != variantCN || authExtras["storeRegion"] != "CN" {
 		t.Errorf("CN defaults missing: %v", authExtras)
 	}
 }
 
-// TestCredentialParityFieldsIntlNoGuess: the intl realm gets NO invented
-// region values (the plugin's intl hosts are marscode.com; cockpit's
+// TestCredentialParityFieldsIntlNoGuess: the trae realm gets NO invented
+// region values (the plugin's trae hosts are marscode.com; cockpit's
 // www.trae.ai constant is not assumed) — region fields only via echo.
 func TestCredentialParityFieldsIntlNoGuess(t *testing.T) {
-	authExtras, _ := credentialParityFields("intl", "", nil, nil)
-	if authExtras["platformId"] != "trae" {
-		t.Errorf("intl platformId=%v want trae", authExtras["platformId"])
-	}
-	if authExtras["authClientId"] != "ono9krqynydwx5" {
-		t.Errorf("intl authClientId=%v want ono9krqynydwx5", authExtras["authClientId"])
-	}
-	for _, guessed := range []string{"loginRegion", "storeRegion", "aiRegion", "authDomain"} {
-		if _, exists := authExtras[guessed]; exists {
-			t.Errorf("intl must not guess %s", guessed)
+	for _, spelling := range []string{"trae", "intl"} {
+		authExtras, _ := credentialParityFields(spelling, "", nil, nil)
+		if authExtras["platformId"] != "trae" {
+			t.Errorf("%s platformId=%v want trae", spelling, authExtras["platformId"])
+		}
+		if authExtras["authClientId"] != "ono9krqynydwx5" {
+			t.Errorf("%s authClientId=%v want ono9krqynydwx5", spelling, authExtras["authClientId"])
+		}
+		for _, guessed := range []string{"loginRegion", "storeRegion", "aiRegion", "authDomain"} {
+			if _, exists := authExtras[guessed]; exists {
+				t.Errorf("%s must not guess %s", spelling, guessed)
+			}
 		}
 	}
 }

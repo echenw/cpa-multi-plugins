@@ -24,12 +24,16 @@ func TestRequestLoginVariantDefaultsIntl(t *testing.T) {
 
 func TestRequestLoginVariantExplicitCN(t *testing.T) {
 	for _, raw := range []string{
+		`{"region":"trae-cn"}`,
+		`{"login_region":"trae-cn"}`,
+		`{"login_variant":"trae-cn"}`,
+		`{"variant":"trae-cn"}`,
 		`{"region":"cn"}`,
 		`{"login_region":"cn"}`,
 		`{"login_variant":"cn"}`,
 		`{"variant":"cn"}`,
 		`{"region":"CN"}`,
-		`{"region":" cn "}`,
+		`{"region":" trae-cn "}`,
 	} {
 		got, err := resolveRequestLoginVariant([]byte(raw))
 		if err != nil {
@@ -43,6 +47,9 @@ func TestRequestLoginVariantExplicitCN(t *testing.T) {
 
 func TestRequestLoginVariantExplicitIntl(t *testing.T) {
 	for _, raw := range []string{
+		`{"region":"trae"}`,
+		`{"login_region":"trae"}`,
+		`{"variant":"trae"}`,
 		`{"region":"intl"}`,
 		`{"login_region":"intl"}`,
 		`{"variant":"intl"}`,
@@ -85,8 +92,15 @@ func TestExistingAccountVariantsUnchanged(t *testing.T) {
 	if got := sniffVariantFromJSON([]byte(`{"auth":{"webId":"w","tenant":"t"}}`)); got != variantIntl {
 		t.Fatalf("intl marker payload sniffed as %q", got)
 	}
-	if got := normalizeVariant("solo"); got != variantSolo {
-		t.Fatalf("normalize solo = %q", got)
+	// Retired solo spellings fall back to the trae-cn route (safe-reader:
+	// stored solo accounts keep serving instead of crashing).
+	for _, s := range []string{"solo", " SOLO ", "solo-intl", "trae-solo", "trae-solo-cn"} {
+		if got := normalizeVariant(s); got != variantCN {
+			t.Fatalf("normalize %q = %q, want %q", s, got, variantCN)
+		}
+	}
+	if got := sniffVariantFromJSON([]byte(`{"auth":{"variant":"solo"}}`)); got != variantCN {
+		t.Fatalf("stored solo payload sniffed as %q, want %q", got, variantCN)
 	}
 }
 
@@ -150,15 +164,15 @@ func TestPanelLoginStartDefaultsIntl(t *testing.T) {
 			t.Fatalf("body %q: status=%d payload=%v, want 200", body, status, payload)
 		}
 		if !*called || *gotRealm != variantIntl {
-			t.Fatalf("body %q: start called=%v realm=%q, want intl", body, *called, *gotRealm)
+			t.Fatalf("body %q: start called=%v realm=%q, want trae", body, *called, *gotRealm)
 		}
 		if payload["realm"] != variantIntl {
-			t.Fatalf("body %q: realm=%v, want intl", body, payload["realm"])
+			t.Fatalf("body %q: realm=%v, want trae", body, payload["realm"])
 		}
-		if payload["auth_url"] != "https://auth.example/start?realm=intl" {
+		if payload["auth_url"] != "https://auth.example/start?realm="+variantIntl {
 			t.Fatalf("body %q: auth_url=%v", body, payload["auth_url"])
 		}
-		if payload["state"] != "stub-state-intl" {
+		if payload["state"] != "stub-state-"+variantIntl {
 			t.Fatalf("body %q: state=%v, want the poll key for the modal", body, payload["state"])
 		}
 		if _, ok := payload["expires_at"]; !ok {
@@ -171,17 +185,17 @@ func TestPanelLoginStartDefaultsIntl(t *testing.T) {
 }
 
 func TestPanelLoginStartCNRespected(t *testing.T) {
-	for _, body := range []string{`{"region":"cn"}`, `{"variant":"cn"}`, `{"login_region":"cn"}`} {
+	for _, body := range []string{`{"region":"trae-cn"}`, `{"variant":"trae-cn"}`, `{"login_region":"trae-cn"}`, `{"region":"cn"}`, `{"variant":"cn"}`} {
 		called, gotRealm := stubLoginStart(t)
 		status, payload := postPanelLoginStart(t, body)
 		if status != http.StatusOK {
 			t.Fatalf("body %q: status=%d payload=%v, want 200", body, status, payload)
 		}
 		if !*called || *gotRealm != variantCN {
-			t.Fatalf("body %q: start called=%v realm=%q, want cn", body, *called, *gotRealm)
+			t.Fatalf("body %q: start called=%v realm=%q, want trae-cn", body, *called, *gotRealm)
 		}
 		if payload["realm"] != variantCN {
-			t.Fatalf("body %q: realm=%v, want cn", body, payload["realm"])
+			t.Fatalf("body %q: realm=%v, want trae-cn", body, payload["realm"])
 		}
 	}
 }

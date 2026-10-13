@@ -95,7 +95,7 @@ func closeListener(ln netListener) {
 	}
 }
 
-// completeLogin marks a cn/solo login flow as completed. Idempotent and
+// completeLogin marks a trae-cn login flow as completed. Idempotent and
 // goroutine-safe: the local-listener flow closes lc.done in acceptCallback,
 // while resource-callback / host-file flows complete here.
 func completeLogin(lc *loginCtx) {
@@ -241,7 +241,7 @@ func resolveCallbackState(vals url.Values) string {
 }
 
 // singleInflightLoginState returns the state key when exactly one live
-// login (cn/solo or intl) is in flight, and "" otherwise. Expired states
+// login (trae-cn or trae) is in flight, and "" otherwise. Expired states
 // don't count — they can no longer complete.
 func singleInflightLoginState() string {
 	var live []string
@@ -269,7 +269,7 @@ func singleInflightLoginState() string {
 // handleOAuthCallbackResource serves GET /v0/resource/plugins/trae/oauth_callback —
 // the redirect target embedded in the Trae verification URI. The full
 // upstream query arrives in req.Query; the login is selected via
-// resolveCallbackState (cn/solo flows live in loginStates, intl flows in
+// resolveCallbackState (trae-cn flows live in loginStates, trae flows in
 // intlloginStates — matching the poll dispatch's state-location routing).
 func handleOAuthCallbackResource(req pluginapi.ManagementRequest) []byte {
 	vals := req.Query
@@ -297,7 +297,7 @@ func handleOAuthCallbackResource(req pluginapi.ManagementRequest) []byte {
 	if state == "" {
 		return callbackResultHTML("Login failed", "missing state parameter — 回调链接缺少状态参数，请回到面板重新点「登录」，完成授权后立即粘贴新链接 (please restart the login)")
 	}
-	// CN/SOLO flow.
+	// CN flow.
 	if v, ok := loginStates.Load(state); ok {
 		lc := v.(*loginCtx)
 		p := parseCallbackParams(vals)
@@ -428,7 +428,7 @@ func handleOAuthSubmitResource(req pluginapi.ManagementRequest) []byte {
 		return callbackResultHTML("Invalid callback URL",
 			"The pasted text is not a parseable URL with query parameters. Copy the full address-bar URL shown after the authorization redirect fails.")
 	}
-	// Replay through the shared resolution path — cn/solo/intl states all
+	// Replay through the shared resolution path — trae-cn/trae states all
 	// resolve here (loginStates + intlloginStates via resolveCallbackState).
 	return handleOAuthCallbackResource(pluginapi.ManagementRequest{Query: u.Query()})
 }

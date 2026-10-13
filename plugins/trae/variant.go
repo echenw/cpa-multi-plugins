@@ -1,8 +1,22 @@
-// variant.go — per-account variant plumbing for the merged trae plugin
-// (v0.12.0). trae-cn, trae-solo-cn and trae-intl were separate plugins;
-// they are merged here. Each auth file carries its variant explicitly
-// (auth.variant), derived from the filename for legacy files by adopt.go.
-// NEW logins target the request-carried region (default intl).
+// variant.go — per-account region plumbing for the merged trae plugin.
+//
+// Regions follow the B-plan classification: cn is suffixed ("trae-cn"),
+// bare ("trae") is international. Identity strings (auth.variant, file
+// slugs, exclusion sub-keys) use the hyphenated region slug; display
+// labels use the natural wording ("trae cn" / "trae").
+//
+// The retired SOLO region ("solo", legacy trae-solo-cn plugin) is deleted
+// end-to-end: no login, no routing branch, no pill, no file namespace, no
+// model namespace. Already-stored solo credentials keep working through
+// the safe-reader fallback: normalizeVariant maps every solo spelling onto
+// the trae-cn route (same trae.cn user system), while authNote/variantLabel
+// and the panel keep the verbatim "SOLO" badge so stored accounts stay
+// listed under 全部 instead of vanishing.
+//
+// Host binding is NOT affected by this file: the host binds this plugin by
+// provider "trae" (scheduler candidate Provider filter, auth.parse Provider
+// + type fields) and the "trae-" filename prefix (hostAuthList,
+// isOurFamilyFileName) — none of which change here.
 package main
 
 import (
@@ -13,70 +27,88 @@ import (
 )
 
 const (
-	variantCN   = "cn"
-	variantSolo = "solo"
-	variantIntl = "intl"
+	// variantCN is the suffixed CN region slug (B-plan).
+	variantCN = "trae-cn"
+	// variantIntl is the bare international region slug (B-plan: bare = intl).
+	variantIntl = "trae"
 )
 
-// normalizeVariant maps any stored hint onto cn/solo/intl (default cn).
+// retiredVariantSolo is the deleted SOLO region's stored spelling. It is
+// referenced ONLY by the safe-reader fallback (normalizeVariant, authNote,
+// variantLabel, legacyTraeVariant): no new credential may carry it, and no
+// routing branch switches on it.
+const retiredVariantSolo = "solo"
+
+// normalizeVariant maps any stored hint onto the canonical routing region
+// (trae-cn / trae, default trae-cn).
+//
+// Tolerant inputs (never written, always readable — the safe-reader):
+//   - legacy "cn" / "intl" spellings from pre-B-plan files,
+//   - "trae-intl" (pre-B-plan intl file slug leaking into a variant field),
+//   - every retired solo spelling ("solo", "solo-intl", "trae-solo",
+//     "trae-solo-cn") → trae-cn fallback: solo accounts share the trae.cn
+//     user system with trae-cn, so the CN route serves them without crashing.
 func normalizeVariant(v string) string {
 	switch strings.ToLower(strings.TrimSpace(v)) {
-	case variantSolo:
-		return variantSolo
-	case variantIntl:
+	case variantIntl, "intl", "trae-intl":
 		return variantIntl
+	case variantCN, "cn",
+		retiredVariantSolo, "solo-intl", "trae-solo", "trae-solo-cn":
+		return variantCN
 	default:
 		return variantCN
 	}
 }
 
-// oauthAuthFor returns the OAuth auth_from value for a login variant.
+// oauthAuthFor returns the OAuth auth_from value for a login region.
+// Post-solo there is a single value ("trae"); kept as a function so the
+// login call sites (and the live device-limit test) keep compiling.
 func oauthAuthFor(variant string) string {
-	if variant == variantSolo {
-		return "solo"
-	}
 	return "trae"
 }
 
-// oauthPlatformCodeFor returns the device platform code for a variant.
+// oauthPlatformCodeFor returns the device platform code for a login region.
+// Post-solo there is a single value ("IDE_PC"); kept as a function for the
+// same reason as oauthAuthFor.
 func oauthPlatformCodeFor(variant string) string {
-	if variant == variantSolo {
-		return "SOLO_PC"
-	}
 	return "IDE_PC"
 }
 
 // oauthHideSaasLoginFor reports whether the verification URI hides the
-// SaaS login entry (SOLO only).
+// SaaS login entry. Post-solo nothing hides it; kept as a function for the
+// same reason as oauthAuthFor.
 func oauthHideSaasLoginFor(variant string) bool {
-	return variant == variantSolo
+	return false
 }
 
-// authNote builds the one-line note surfaced on host credential cards
-// (workbuddy/qoder parity): the variant tag makes cn/solo/intl accounts
-// distinguishable in the credential manager without opening the file.
+// authNote builds the one-line note surfaced on host credential cards.
+// Display wording is natural ("trae cn" / "trae"); stored solo accounts
+// keep the verbatim "SOLO" note (safe-reader: they stay distinguishable
+// instead of being relabeled into a region they were not created in).
 // The INTL chain (intl_main.go) pins its note directly — its accounts are
 // intl by construction regardless of the parsed Variant field.
 func authNote(variant string) string {
 	switch strings.ToLower(strings.TrimSpace(variant)) {
-	case variantSolo:
+	case retiredVariantSolo, "solo-intl", "trae-solo", "trae-solo-cn":
 		return "SOLO"
-	case variantIntl:
-		return "INTL"
+	case variantIntl, "intl", "trae-intl":
+		return "trae"
 	default:
-		return "CN"
+		return "trae cn"
 	}
 }
 
 // variantLabel returns a human label for auth card fallbacks.
+// Same wording contract as authNote: natural for live regions, verbatim
+// for the retired solo spelling.
 func variantLabel(variant string) string {
-	switch variant {
-	case variantSolo:
+	switch strings.ToLower(strings.TrimSpace(variant)) {
+	case retiredVariantSolo, "solo-intl", "trae-solo", "trae-solo-cn":
 		return "Trae SOLO CN"
-	case variantIntl:
-		return "Trae Intl"
+	case variantIntl, "intl", "trae-intl":
+		return "trae"
 	default:
-		return "Trae CN"
+		return "trae cn"
 	}
 }
 

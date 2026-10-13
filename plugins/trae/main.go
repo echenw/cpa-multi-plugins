@@ -1,10 +1,11 @@
-// Package main implements the trae-solo-cn CLIProxyAPI dynamic plugin.
+// Package main implements the trae CLIProxyAPI dynamic plugin.
 //
-// trae-solo-cn wraps TRAE Work CN / SOLO CN (trae-api-cn.mchost.guru +
-// api.trae.cn) as a cliproxy provider: Trae OAuth (GetLoginGuidance +
-// AuthCode ExchangeToken), Cloud-IDE-JWT auth, llm_utils_chat +
-// function=solo_work_lite chat executor, daily check-in via checkin_credits,
-// v2 credit API query, multi-account pool with credit-aware scheduler.
+// trae wraps Trae CN (api.trae.cn) and Trae Intl (api.marscode.com) as a
+// cliproxy provider: Trae OAuth (GetLoginGuidance + AuthCode ExchangeToken),
+// Cloud-IDE-JWT auth, llm_utils_chat + function=solo_work_lite chat executor
+// (CN region), Web SOLO remote chat_sessions executor (trae region), daily
+// check-in via checkin_credits, v2 credit API query, multi-account pool with
+// credit-aware scheduler.
 //
 // Protocol layer based on Sliverkiss/traework2api (MIT). Adapted to CPA
 // dynamic plugin C ABI with OAuth login flow, executor, scheduler, checkin,
@@ -119,13 +120,14 @@ const (
 	// Fallback ExchangeToken host if callback does not return loginHost.
 	oauthDefaultHost = "https://api.trae.cn"
 
-	// Variant values for the merged plugin (v0.12.0): cn = Trae Code CN
-	// (authFrom "trae", IDE_PC), solo = Trae SOLO CN (authFrom "solo",
-	// SOLO_PC, hideSaasLogin). Variant is stored per auth file and chosen
-	// for NEW logins via the request-carried region.
-	oauthAuthFrom      = "trae"   // cn variant (kept for reference)
-	oauthPlatformCode  = "IDE_PC" // cn variant
-	oauthHideSaasLogin = false    // cn variant
+	// Variant values for the merged plugin: trae-cn (suffixed CN region)
+	// and trae (bare = international). The retired solo spelling is never
+	// produced for new logins; stored solo files normalize to trae-cn via
+	// normalizeVariant (same trae.cn user system). Variant is stored per auth
+	// file and chosen for NEW logins via the request-carried region.
+	oauthAuthFrom      = "trae"   // trae-cn region (kept for reference)
+	oauthPlatformCode  = "IDE_PC" // trae-cn region
+	oauthHideSaasLogin = false    // trae-cn region
 
 	// Default device fingerprint values (mirrors cockpit-tools defaults).
 	oauthPluginVersion = "1.0.0"
@@ -523,34 +525,21 @@ func buildRegistration() registrationPayload {
 // Models
 // -----------------------------------------------------------------------------
 
-// modelSuffixSolo / modelSuffixIntl namespace every model ID by credential
-// variant so the host can never route a chat request across credential
-// classes (v0.12.2). cn keeps plain IDs (back-compat with trae-cn users);
-// solo appends "-solo"; intl appends "-intl" (handled in intl_main.go).
+// modelSuffixIntl namespaces Intl model IDs so the host can never route a
+// chat request across credential classes. trae-cn keeps plain IDs
+// (back-compat with existing CN users and stored solo accounts, which fall
+// back to the trae-cn route with bare ids).
 const (
-	modelSuffixSolo = "-solo"
 	modelSuffixIntl = "-intl"
 )
 
-// suffixModels appends the variant suffix to every model ID.
-func suffixModels(in []pluginapi.ModelInfo, suffix string) []pluginapi.ModelInfo {
-	if suffix == "" {
-		return in
-	}
-	out := make([]pluginapi.ModelInfo, 0, len(in))
-	for _, m := range in {
-		out = append(out, pluginapi.ModelInfo{ID: m.ID + suffix, Name: m.Name, OwnedBy: m.OwnedBy,
-			ContextLength: m.ContextLength, MaxCompletionTokens: m.MaxCompletionTokens})
-	}
-	return out
-}
-
 func handleModelStatic(raw []byte) ([]byte, error) {
-	// Advertise the UNION of all variant namespaces (used when no accounts
+	// Advertise the UNION of all region namespaces (used when no accounts
 	// are loaded, and for management UI model pickers). v0.12.79 (issue
-	// #9): cn and solo share the same solo_work_lite catalog, so the CN
-	// namespace is the solo list unsuffixed and the solo namespace the
-	// same list with "-solo"; intl keeps auto/work virtual + "-intl".
+	// #9): every region rides solo_work_lite, so the trae-cn namespace is
+	// the shared list unsuffixed; intl keeps auto/work virtual + "-intl".
+	// The retired solo "-solo" namespace is no longer advertised: stored
+	// solo accounts fall back to the trae-cn route with bare ids.
 	var req pluginapi.StaticModelRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, err
@@ -567,7 +556,6 @@ func handleModelStatic(raw []byte) ([]byte, error) {
 		}
 	}
 	add(staticSoloModels())
-	add(suffixModels(staticSoloModels(), modelSuffixSolo))
 	add(intlstaticModels())
 	// v0.12.62: static advertisement honors the provider key (no credential
 	// context → no variant sub-key).
@@ -597,33 +585,29 @@ func handleModelForAuth(request []byte) ([]byte, error) {
 	a, err := parseStoredAuth(req.StorageJSON)
 	if err != nil {
 		log.Printf("model.for_auth: parse storage failed (%v) — static fallback", err)
-		// Variant unknown — advertise the cn ∪ solo static union.
+		// Variant unknown — advertise the trae-cn static fallback (stored solo
+		// accounts share this route via normalizeVariant).
 		return okEnvelope(pluginapi.ModelResponse{
 			Provider: providerName,
 			Models:   staticUnionModels(),
 		})
 	}
 	// v0.12.62: exclusions at BOTH granularities — the provider key
-	// ("trae", whole plugin) and this credential's variant sub-key
-	// ("trae-cn" / "trae-solo"). Intl credentials route through
-	// intlhandleModelForAuth and use "trae-intl".
-	subKey := providerName + "-cn"
-	if a.Variant == variantSolo {
-		subKey = providerName + "-solo"
-	}
+	// ("trae", whole plugin) and this credential's region sub-key
+	// ("trae-cn"). Intl credentials route through
+	// intlhandleModelForAuth and use "trae".
+	subKey := variantCN
 	return okEnvelope(pluginapi.ModelResponse{
 		Provider: providerName,
 		Models:   filterExcludedModels(modelsForVariant(a, req.StorageJSON), req.Host, subKey),
 	})
 }
 
-// modelsForVariant returns the model catalog for ONE account, namespaced
-// by the credential's variant (v0.12.2). Dynamic fetch already targets the
-// account's own function — v0.12.79 (issue #9): every variant rides
-// solo_work_lite (llm_utils_chat rejects everything else with 4001), so cn
-// and solo catalogs come from the same live lane; every returned ID gets the
-// variant suffix so identical upstream names never collide across cn/solo
-// credential classes.
+// modelsForVariant returns the model catalog for ONE account on the trae-cn
+// route (stored solo accounts land here via normalizeVariant). Dynamic fetch
+// already targets the account's own function — v0.12.79 (issue #9): every
+// region rides solo_work_lite (llm_utils_chat rejects everything else with
+// 4001), so the catalog comes from the one live lane with bare ids.
 // fetchModelsFn is the discovery seam: tests swap it to exercise the
 // for_auth chain without the network. Production always uses the shared
 // upstream client.
@@ -635,17 +619,16 @@ var fetchModelsFn = func(a *auth.Auth) ([]upstream.ModelInfo, error) {
 // success, serve last-known-good on failure) can locate the credential's
 // file. modelsForVariant returns the PRE-exclusion advertised catalog.
 func modelsForVariant(a *auth.Auth, storageJSON []byte) []pluginapi.ModelInfo {
-	suffix := ""
-	if a.Variant == variantSolo {
-		suffix = modelSuffixSolo
-	}
+	// Route on the normalized region: stored solo accounts share the
+	// trae-cn catalog and snapshot realm (bare ids, no "-solo" namespace).
+	variant := normalizeVariant(a.Variant)
 	dynamic, err := fetchModelsFn(a)
 	if err != nil {
 		log.Printf("model.for_auth %s (%s): %v — persisted snapshot / static fallback", a.UID, a.Variant, err)
-		if snap, ok := persistedSnapshotForStorage(storageJSON, a.Variant); ok {
+		if snap, ok := persistedSnapshotForStorage(storageJSON, variant); ok {
 			return snap
 		}
-		return suffixModels(staticForVariant(a.Variant), suffix)
+		return staticForVariant(variant)
 	}
 	out := make([]pluginapi.ModelInfo, 0, len(dynamic))
 	seen := make(map[string]bool, len(dynamic))
@@ -654,28 +637,28 @@ func modelsForVariant(a *auth.Auth, storageJSON []byte) []pluginapi.ModelInfo {
 			continue
 		}
 		// "auto"/"work" are Intl-exclusive virtual names — never expose
-		// them on CN/SOLO accounts even if the catalog lists them.
+		// them on trae-cn accounts even if the catalog lists them.
 		if m.ID == "auto" || m.ID == "work" {
 			continue
 		}
 		seen[m.ID] = true
 		out = append(out, pluginapi.ModelInfo{
-			ID:                  m.ID + suffix,
+			ID:                  m.ID,
 			Name:                m.Name,
 			ContextLength:       m.ContextWindow,
 			MaxCompletionTokens: m.MaxTokens,
 		})
 	}
 	if len(out) == 0 {
-		if snap, ok := persistedSnapshotForStorage(storageJSON, a.Variant); ok {
+		if snap, ok := persistedSnapshotForStorage(storageJSON, variant); ok {
 			return snap
 		}
-		return suffixModels(staticForVariant(a.Variant), suffix)
+		return staticForVariant(variant)
 	}
 	// v0.12.63: stamp the last-known-good catalog into the credential file
-	// (advertised ids, post-suffix, pre exclusion — exclusion re-applies on
+	// (advertised ids, pre exclusion — exclusion re-applies on
 	// every serve branch). Change-guarded inside; best-effort.
-	persistModelSnapshot(storageJSON, a.Variant, out)
+	persistModelSnapshot(storageJSON, variant, out)
 	return out
 }
 
@@ -756,17 +739,17 @@ func staticToModelInfos(known []staticModel) []pluginapi.ModelInfo {
 	return out
 }
 
-// staticForVariant picks the fallback catalog for a credential variant.
-// v0.12.79 (issue #9): every variant chats on solo_work_lite, so every
-// variant falls back to the same solo_work_lite snapshot — the old
+// staticForVariant picks the fallback catalog for a credential region.
+// v0.12.79 (issue #9): every region chats on solo_work_lite, so every
+// region falls back to the same solo_work_lite snapshot — the old
 // staticCNModels (seed_m8/kimi-k2/Doubao-Seed-Code) were the IDE-catalog
 // entries of the dead inline_chat lane and 4001'd on every call.
 func staticForVariant(variant string) []pluginapi.ModelInfo {
 	return staticSoloModels()
 }
 
-// staticUnionModels is the parse-fallback when the variant is unknown.
-// v0.12.79 (issue #9): every variant rides the same solo_work_lite catalog,
+// staticUnionModels is the parse-fallback when the region is unknown.
+// v0.12.79 (issue #9): every region rides the same solo_work_lite catalog,
 // so the "union" degenerates to the solo snapshot itself.
 func staticUnionModels() []pluginapi.ModelInfo {
 	return staticSoloModels()
@@ -828,7 +811,8 @@ func parseStoredAuth(raw []byte) (*auth.Auth, error) {
 
 // isOurFamilyFileName reports whether a type-less auth file belongs to this
 // plugin by name: our canonical prefix or a pre-merge family prefix/legacy
-// single-file name (trae-cn / trae-solo-cn / trae-intl).
+// single-file name (trae-cn / trae-solo-cn / trae-intl — the retired solo
+// names stay claimable so stored solo files are never orphaned).
 func isOurFamilyFileName(name string) bool {
 	lower := strings.ToLower(strings.TrimSpace(name))
 	for _, p := range []string{"trae-", "trae-cn-", "trae-solo-cn-", "trae-intl-"} {
@@ -844,7 +828,8 @@ func isOurFamilyFileName(name string) bool {
 }
 
 // isOurDeclaredType reports whether an explicitly declared auth "type"
-// belongs to this plugin's family (current name plus pre-merge names).
+// belongs to this plugin's family (current name plus pre-merge names,
+// including the retired trae-solo-cn so stored solo files stay routable).
 func isOurDeclaredType(t string) bool {
 	switch strings.ToLower(strings.TrimSpace(t)) {
 	case "trae", "trae-cn", "trae-solo-cn", "trae-intl":
@@ -907,9 +892,10 @@ func handleParseAuth(request []byte) ([]byte, error) {
 	if err != nil {
 		return errorEnvelope("parse_error", err.Error()), nil
 	}
-	// Register the account in the pool (cn/solo only; intl accounts are
-	// handled by the intl handler set and skipped here).
-	if a.Variant != "intl" && accountPool != nil {
+	// Register the account in the pool (trae-cn only; intl accounts are
+	// handled by the intl handler set and skipped here). Stored solo
+	// accounts land here too — they share the trae-cn route.
+	if normalizeVariant(a.Variant) != variantIntl && accountPool != nil {
 		accountPool.Add(a)
 	}
 	return okEnvelope(pluginapi.AuthParseResponse{
@@ -955,9 +941,9 @@ func handleStartLogin(request []byte) ([]byte, error) {
 	return startLoginWithVariant(request, lv)
 }
 
-// startLoginWithVariant starts a CN/SOLO login flow pinned to lv. The host
+// startLoginWithVariant starts a trae-cn login flow pinned to lv. The host
 // RPC entry (handleStartLogin) passes the request-carried region — the
-// OAuth entry point stays single per plugin; which variant it targets is
+// OAuth entry point stays single per plugin; which region it targets is
 // chosen per login attempt.
 func startLoginWithVariant(request []byte, lv string) ([]byte, error) {
 	// Step 0: host login context (AuthDir for auth-file persistence).
@@ -1461,10 +1447,8 @@ func handlePollLogin(request []byte) ([]byte, error) {
 			// legacy unbound path.
 			DevicePublicKey:  lc.devicePublicKey,
 			DevicePrivateKey: lc.devicePrivateKey,
-			// v0.12.60: refreshLocked 以谱系选 OAuth ClientID
-			// （solo → en1oxy7wnw8j9n）。裸 Auth 缺 variant 时一律解析成
-			// cn client，SOLO 登录当场就换发出跨类 token——ug/pay 族
-			// 401 code=1001（积分查询/签到全挂，聊天却正常）。
+			// v0.12.60: refreshLocked 以谱系选 OAuth ClientID。裸 Auth 缺
+			// variant 时一律解析成 trae-cn client（见 normalizeVariant 默认）。
 			Variant: lc.variant,
 		}
 		if err := upstreamClient.RefreshToken(a); err != nil {
@@ -1541,9 +1525,8 @@ func handlePollLogin(request []byte) ([]byte, error) {
 		MachineID:    lc.machineID,
 		DeviceID:     lc.deviceID,
 	}
-	// v0.12.5: stamp the login's variant (cn/solo). Without this the saved
-	// auth file carried variant:"" and a solo login was re-claimed as cn
-	// (wrong ClientID / endpoints / models on every later dispatch).
+	// v0.12.5: stamp the login's region. Without this the saved
+	// auth file carried variant:"" and was misrouted on every later dispatch.
 	a.Variant = lc.variant
 	// v0.12.44: GetUserInfoFull keeps the raw profile response (cockpit-tools
 	// trae_profile_raw parity: avatar/region/tenant/mobile live in Result).
@@ -1612,9 +1595,6 @@ func handlePollLogin(request []byte) ([]byte, error) {
 		Auth: pluginapi.AuthData{
 			// v0.12.8: ID must equal the saved file name so the login upsert
 			// and the watcher claim of the new file share one record.
-			// v0.12.27: per-variant namespace (solo → trae-solo-cn-<uid>.json)
-			// so a cn+solo dual login of one Trae account stops overwriting
-			// itself ("solo became init").
 			Provider:    providerName,
 			ID:          credentialFileName(a.Variant, a.UID),
 			FileName:    credentialFileName(a.Variant, a.UID),
@@ -1631,9 +1611,9 @@ func handlePollLogin(request []byte) ([]byte, error) {
 
 // verificationURIParams carries the parameters for buildVerificationURI.
 type verificationURIParams struct {
-	AuthFrom      string // "solo" or "trae"
+	AuthFrom      string // always "trae" post-solo
 	PluginVersion string // e.g. "1.0.0"
-	ClientID      string // SOLO: en1oxy7wnw8j9n; non-SOLO: ono9krqynydwx5
+	ClientID      string // trae-cn/trae region client id
 	LoginTraceID  string
 	CallbackURL   string // auth_callback_url (NOT URL-encoded per cockpit-tools)
 	MachineID     string
@@ -1645,7 +1625,7 @@ type verificationURIParams struct {
 	AppVersion    string // e.g. "0.1.43" (= upstream.IdeVersion)
 	AppType       string // e.g. "trae"
 	CodeChallenge string // PKCE challenge (base64url no-pad)
-	HideSaasLogin bool   // SOLO only; non-SOLO omits this param
+	HideSaasLogin bool   // always false post-solo; non-SOLO omits this param
 }
 
 // buildVerificationURI builds the user-facing OAuth login URL.
@@ -1699,7 +1679,7 @@ func buildVerificationURI(loginHost string, p verificationURIParams) string {
 type deviceInfo struct {
 	DeviceID        string `json:"DeviceID"`
 	MachineID       string `json:"MachineID"`
-	PlatformCode    string `json:"PlatformCode"` // SOLO_PC | IDE_PC
+	PlatformCode    string `json:"PlatformCode"` // IDE_PC (post-solo single lineage)
 	DeviceType      string `json:"DeviceType"`   // "PC"
 	DeviceName      string `json:"DeviceName"`
 	DeviceModel     string `json:"DeviceModel"`     // = DeviceBrand
@@ -1887,23 +1867,23 @@ func toInt64(v any) (int64, bool) {
 // TenantID/NonPlainTextMobile/RegisterTime）> variant 推导默认值。
 //
 // 默认值只取 cockpit 硬编码常量（trae_account_core_platform_storage.rs:196-199）：
-// CN 谱系 authDomain=www.trae.cn、loginRegion=cn、storeRegion=CN、aiRegion=CN；
-// intl/solo-intl 谱系 authDomain=www.trae.ai，region 类字段不做猜测（仅回显有值才落盘）。
-// 纯函数、可测试；永不返回错误（回包解析失败 = 只落 variant 可推导的字段）。
+// CN 谱系 authDomain=www.trae.cn、loginRegion=trae-cn、storeRegion=CN、aiRegion=CN；
+// trae 谱系 region 类字段不做猜测（仅回显有值才落盘）。
+// 纯函数、可测试；永不返回错误（回包解析失败 = 只落 region 可推导的字段）。
 func credentialParityFields(variant, loginHost string, exchangeRaw, profileRaw []byte) (authExtras, accountExtras map[string]any) {
 	authExtras = map[string]any{}
 	accountExtras = map[string]any{}
 
-	// 1) 平台谱系（始终落盘，凭证自证的四谱系标识）。
+	// 1) 平台谱系（始终落盘，凭证自证的谱系标识）。
 	authExtras["platformId"] = upstream.PlatformIDFor(variant)
 	authExtras["platformName"] = upstream.PlatformNameFor(variant)
 
-	// 2) region/host 默认值（仅 CN 谱系有 cockpit 常量背书；intl 的
-	// authDomain 不默认 —— 本插件 intl realm 历史上走 marscode.com，
+	// 2) region/host 默认值（仅 trae-cn 谱系有 cockpit 常量背书；trae 的
+	// authDomain 不默认 —— 本插件 trae realm 历史上走 marscode.com，
 	// 与 cockpit TRAE_AUTH_DOMAIN=www.trae.ai 的现行值不一致，不猜测）。
 	if !upstream.IsIntlVariant(variant) {
 		authExtras["authDomain"] = "www.trae.cn"
-		authExtras["loginRegion"] = "cn"
+		authExtras["loginRegion"] = variantCN
 		authExtras["storeRegion"] = "CN"
 		authExtras["aiRegion"] = "CN"
 	}
@@ -2496,7 +2476,8 @@ func quotaGateProbe(p *pool.Pool, a *auth.Auth, probe func(*auth.Auth) (*upstrea
 	}
 	usage, err := probe(a)
 	if err == nil {
-		// 池里只有 CN/SOLO 账号（intl 凭证不进池，见 handleParseAuth 注释）。
+		// 池里只有 trae-cn 账号（trae 凭证不进池，见 handleParseAuth 注释；
+		// 已存储的 solo 账号同样走 trae-cn 路由）。
 		remain, known := upstream.PackListRemain(usage.UserEntitlementPackList, true)
 		if known && remain > 0 {
 			// 上游已补额/用户已充值：解冻并放行 —— CPA 面板「重置配额」

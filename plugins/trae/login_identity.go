@@ -95,17 +95,15 @@ func identityFromJSON(raw string, depth int) cbIdentity {
 }
 
 // unknownUIDFallback returns the stable last-resort file identity for a
-// login variant. It is intentionally CONSTANT per variant: repeated logins
+// login region. It is intentionally CONSTANT per region: repeated logins
 // of the same account overwrite the same file instead of minting
-// trae-<uuid>.json duplicates. v0.12.27: solo gets its own fallback so a
-// solo login with an unresolvable identity no longer collides with (and
-// overwrite-flips) a cn login of the same situation.
+// trae-<uuid>.json duplicates. Post-solo there are two regions (trae-cn,
+// trae); a re-login always repairs it, and both real sources make the case
+// vanishingly rare.
 func unknownUIDFallback(variant string) string {
 	switch normalizeVariant(variant) {
 	case variantIntl:
 		return "unknown-intl"
-	case variantSolo:
-		return "solo-unknown"
 	default:
 		return "unknown-cn"
 	}

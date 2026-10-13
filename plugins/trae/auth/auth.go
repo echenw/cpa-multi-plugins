@@ -36,7 +36,7 @@ type Auth struct {
 	// claim 恒遭 9074（magpie#808 mintonight/MiFaZhan 同账号双 token 对照实验定案）。
 	DevicePublicKey  string
 	DevicePrivateKey string
-	Variant          string // cn | solo (merged trae-solo-cn); intl handled by intl parser
+	Variant          string // trae-cn | trae (B-plan regions); retired "solo" spellings survive verbatim in stored files, route via main.normalizeVariant
 	UID              string
 	EnterpriseID     string
 	Nickname         string

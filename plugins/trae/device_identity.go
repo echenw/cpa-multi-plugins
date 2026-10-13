@@ -12,12 +12,10 @@
 //     the account: deriveAccountDeviceIdentity(variant, uid) is a pure
 //     function — deviceId (16 digits), machineId (UUID-v4 shaped) and the
 //     P-256 device key pair are all deterministic functions of
-//     (variant, uid). Same account → same device, on every login, on every
+//     (region, uid). Same account → same device, on every login, on every
 //     install, forever (re-logins can never burn another device slot, which
 //     is what locked accounts out with 403 code=20401 "Device limit reached").
-//     Different accounts → different devices. A solo login of the same human
-//     gets its own device too (solo and cn are different server lineages —
-//     v0.12.60's cross-lineage poisoning).
+//     Different accounts → different devices.
 //   - The identity is known the moment the OAuth callback echoes userInfo
 //     (the account's uid — login_identity.go parses it, cockpit-tools
 //     TraeCallbackPayload.userInfo). The callback handlers therefore APPLY
@@ -55,8 +53,8 @@ import (
 	"github.com/mmqz/cpa-multi-plugins/plugins/trae/auth"
 )
 
-// deviceIdentityFilePattern is the per-variant identity file name; %s is the
-// normalized variant (cn|solo|intl), matching the pending-login file's
+// deviceIdentityFilePattern is the per-region identity file name; %s is the
+// normalized region (trae-cn|trae), matching the pending-login file's
 // dot-prefix convention so the host/claim logic ignores it.
 const deviceIdentityFilePattern = ".trae-device-identity-%s.json" // %s = 归一化 variant
 
@@ -172,7 +170,7 @@ func derivedMachineID(variant, uid string) string {
 	return s[0:8] + "-" + s[8:12] + "-" + s[12:16] + "-" + s[16:20] + "-" + s[20:32]
 }
 
-// applyDerivedIdentityCN swaps a cn/solo login ctx onto the account's
+// applyDerivedIdentityCN swaps a trae-cn login ctx onto the account's
 // derived identity. Called the moment the callback reveals WHO is logging in
 // (userInfo echo) — before any exchange point, GetUserInfo call or credential
 // save reads the identity, so the whole downstream chain (exchange DeviceInfo,

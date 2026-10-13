@@ -1,13 +1,13 @@
 // models_exclusion.go — v0.12.62: oauth-excluded-models consumption for the
 // trae plugin, at BOTH granularities the management panel's global page can
-// express: the bare provider key ("trae" — excludes across every variant
-// namespace) and the variant sub-keys ("trae-cn" / "trae-solo" /
-// "trae-intl" — one namespace each). Any key present in the host config
-// shows up in the panel's provider dropdown, so per-channel entries become
-// first-class citizens of the global exclude page. trae's namespaces are
-// model-ID-suffixed (cn = bare ids, solo = "-solo", intl = "-intl" plus the
-// bare virtual auto/work), so exclusion patterns always match the
-// ADVERTISED id.
+// express: the bare provider key ("trae" — excludes across every region
+// namespace) and the region sub-keys ("trae-cn" / "trae" — one namespace
+// each; the trae sub-key coincides with the provider key and is therefore
+// idempotent). Any key present in the host config shows up in the panel's
+// provider dropdown, so per-channel entries become first-class citizens of
+// the global exclude page. trae's namespaces are model-ID-suffixed
+// (trae-cn = bare ids, trae = "-intl" plus the bare virtual auto/work), so
+// exclusion patterns always match the ADVERTISED id.
 package main
 
 import (

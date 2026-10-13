@@ -24,10 +24,12 @@ func TestIsIntlStoredAuth(t *testing.T) {
 		want bool
 	}{
 		{"nil", nil, false},
-		{"variant intl", &storedAuth{Variant: "intl"}, true},
+		{"variant trae", &storedAuth{Variant: "trae"}, true},
+		{"variant intl legacy", &storedAuth{Variant: "intl"}, true},
 		{"variant INTL case", &storedAuth{Variant: "INTL"}, true},
-		{"variant cn", &storedAuth{Variant: "cn"}, false},
-		{"variant solo", &storedAuth{Variant: "solo"}, false},
+		{"variant trae-cn", &storedAuth{Variant: "trae-cn"}, false},
+		{"variant cn legacy", &storedAuth{Variant: "cn"}, false},
+		{"variant solo retired", &storedAuth{Variant: "solo"}, false},
 		{"empty variant trae.ai domain", &storedAuth{Auth: storedTokens{Domain: "trae.ai"}}, true},
 		{"empty variant marscode", &storedAuth{Auth: storedTokens{Domain: "api.marscode.com"}}, false},
 		{"empty variant api.trae.cn", &storedAuth{Auth: storedTokens{Domain: "api.trae.cn"}}, false},
@@ -128,8 +130,8 @@ func TestRefreshAccountCredits_IntlRoutesToIntlPayFace(t *testing.T) {
 	if errStr, ok := entry["error"]; ok {
 		t.Fatalf("unexpected error: %v", errStr)
 	}
-	if entry["variant"] != "intl" {
-		t.Errorf("variant = %v, want intl", entry["variant"])
+	if entry["variant"] != variantIntl {
+		t.Errorf("variant = %v, want trae", entry["variant"])
 	}
 	if entry["remain_known"] != true {
 		t.Fatalf("remain_known = %v, want true (advanced_model_request_limit mapped in)", entry["remain_known"])
@@ -184,8 +186,8 @@ func TestRefreshAccountCredits_CNKeepsCNFace(t *testing.T) {
 	if errStr == "" {
 		t.Fatalf("expected CN ent_usage error (unreachable host), got entry %v", entry)
 	}
-	if len(errStr) > 0 && (errStr[:4] == "intl") {
-		t.Errorf("CN failure mislabeled as intl: %q", errStr)
+	if len(errStr) > 0 && (errStr[:4] == "trae") {
+		t.Errorf("CN failure mislabeled as trae: %q", errStr)
 	}
 }
 

@@ -1,13 +1,13 @@
-// management.go implements the Trae SOLO CN management API and web panel:
+// management.go implements the Trae management API and web panel:
 // the account dashboard (uid, nickname, credits, plan, check-in status),
 // manual check-in (single or all accounts), credit query, token refresh,
 // and the account-pool status (cooling / disabled state).
 //
 // Routes are exposed under two prefixes:
-//   - /v0/management/plugins/trae-solo-cn/*  — JSON endpoints (CPA-management-
+//   - /v0/management/plugins/trae/*  — JSON endpoints (CPA-management-
 //     authenticated by host middleware; plugin-layer auth only kicks in when
 //     management_key is configured).
-//   - /v0/resource/plugins/trae-solo-cn/*    — unauthenticated browser UI
+//   - /v0/resource/plugins/trae/*    — unauthenticated browser UI
 //     (panel.html) and menu entries surfaced in the CPA management UI.
 //
 // The contract follows workbuddy/management.go: handleManagement returns an
@@ -81,37 +81,37 @@ func setManagementBasePath(p string) {
 }
 
 // managementRegistration describes the routes + resources this plugin serves.
-// Paths are registered relative to /plugins/trae-solo-cn — the host prepends
+// Paths are registered relative to /plugins/trae — the host prepends
 // either /v0/management or /v0/resource/plugins/<provider> based on which list
 // they appear in (Routes vs Resources).
 func managementRegistration() managementRegistrationResponse {
 	base := "/plugins/" + providerName
 	return managementRegistrationResponse{
 		Routes: []managementRoute{
-			{Method: http.MethodGet, Path: base + "/accounts", Description: "List Trae SOLO CN accounts with credits, plan, and check-in status."},
+			{Method: http.MethodGet, Path: base + "/accounts", Description: "List trae cn accounts with credits, plan, and check-in status (stored solo accounts included, SOLO badge)."},
 			{Method: http.MethodPost, Path: base + "/checkin", Description: "Manually check in one account (auth_index) or all accounts."},
 			{Method: http.MethodGet, Path: base + "/credits", Description: "Get real-time credits for one (auth_index query) or all accounts."},
 			{Method: http.MethodPost, Path: base + "/refresh", Description: "Force refresh access tokens for all accounts and return the refreshed dashboard (accounts)."},
 			{Method: http.MethodGet, Path: base + "/status", Description: "Account-pool state: cooling / disabled reasons per account."},
 			{Method: http.MethodPost, Path: base + "/release", Description: "Manually release a quota-exhaustion freeze (1005/4008 / scan-zero) for one account (uid, or auth_index fallback). Pair with CPA reset-quota for the host-side 30-min model cooldown."},
 			{Method: http.MethodPost, Path: base + "/import", Description: "Import Trae credential JSON (nested or flat) into host auth store."},
-			{Method: http.MethodGet, Path: base + "/intl/accounts", Description: "Trae Intl: list accounts with uid, nickname, and token expiry."},
-			{Method: http.MethodGet, Path: base + "/intl/status", Description: "Trae Intl: plugin status."},
-			{Method: http.MethodPost, Path: base + "/intl/import", Description: "Trae Intl: import credential JSON into host auth store."},
-			{Method: http.MethodGet, Path: base + "/models/groups", Description: "Per-variant model catalog (model_cache snapshots; ?refresh=1 re-discovers) for the panel's exclusion picker."},
-			{Method: http.MethodPost, Path: base + "/login/start", Description: "Panel authorize-login: start an OAuth login for {region|variant: cn|intl} (default intl; anything else 400 with nothing started). Returns {auth_url, realm, state, expires_at} for the in-panel OAuth modal."},
-		{Method: http.MethodPost, Path: base + "/login/poll", Description: "Panel OAuth modal: poll an in-panel login by {state} → {status: pending|success|expired|error}. Success persists the credential via host.auth.save."},
-		{Method: http.MethodPost, Path: base + "/login/callback", Description: "Panel OAuth modal: submit the browser address-bar callback URL {state, callback_url} (same shapes oauth_submit accepts), then one immediate poll attempt."},
+			{Method: http.MethodGet, Path: base + "/intl/accounts", Description: "Trae (intl): list accounts with uid, nickname, and token expiry."},
+			{Method: http.MethodGet, Path: base + "/intl/status", Description: "Trae (intl): plugin status."},
+			{Method: http.MethodPost, Path: base + "/intl/import", Description: "Trae (intl): import credential JSON into host auth store."},
+			{Method: http.MethodGet, Path: base + "/models/groups", Description: "Per-region model catalog (model_cache snapshots; ?refresh=1 re-discovers) for the panel's exclusion picker."},
+			{Method: http.MethodPost, Path: base + "/login/start", Description: "Panel authorize-login: start an OAuth login for {region|variant: trae-cn|trae} (default trae; anything else 400 with nothing started). Returns {auth_url, realm, state, expires_at} for the in-panel OAuth modal."},
+			{Method: http.MethodPost, Path: base + "/login/poll", Description: "Panel OAuth modal: poll an in-panel login by {state} → {status: pending|success|expired|error}. Success persists the credential via host.auth.save."},
+			{Method: http.MethodPost, Path: base + "/login/callback", Description: "Panel OAuth modal: submit the browser address-bar callback URL {state, callback_url} (same shapes oauth_submit accepts), then one immediate poll attempt."},
 		},
-		// Single menu entry (v0.12.2): /panel covers CN + SOLO + Intl
+		// Single menu entry (v0.12.2): /panel covers trae-cn + trae
 		// accounts. Legacy /intl_panel path serves the same panel.
 		Resources: []resourceRoute{
-			{Path: "/panel", Menu: "Trae", Description: "Trae dashboard: CN/SOLO credits, check-in, accounts + Intl accounts."},
+			{Path: "/panel", Menu: "Trae", Description: "Trae dashboard: trae cn credits, check-in, accounts + trae accounts."},
 			// Menu-less: routable browser resources without UI entries.
-			{Path: "/intl_panel", Description: "Trae Intl dashboard (linked from the main panel)."},
+			{Path: "/intl_panel", Description: "Trae intl dashboard (linked from the main panel)."},
 			{Path: "/oauth_callback", Description: "OAuth login callback redirect target."},
 			{Path: "/oauth_submit", Description: "Paste-to-complete fallback: GET with cb_url=<url-encoded failed redirect URL> finishes the login remotely (host resource routes are GET-only)."},
-			{Path: "/login_status", Description: "Live login state for the panel status line: pending variant, callback endpoint, TTL remaining, last outcome (data only, no secrets)."},
+			{Path: "/login_status", Description: "Live login state for the panel status line: pending region, callback endpoint, TTL remaining, last outcome (data only, no secrets)."},
 		},
 	}
 }
@@ -184,9 +184,9 @@ func handleManagement(raw []byte) ([]byte, error) {
 }
 
 // handlePanelLoginStart serves POST <base>/login/start — the management
-// panel's authorize-login button. Body carries the realm the same way an
+// panel's authorize-login button. Body carries the region the same way an
 // auth.login_start request does (region / login_region / login_variant /
-// variant: cn|intl); absent keys resolve to the intl default. Any other
+// variant: trae-cn|trae); absent keys resolve to the trae default. Any other
 // non-empty value is a 400 and nothing is started. On success it returns
 // {auth_url, realm, state, expires_at}: the in-panel OAuth modal shows
 // auth_url (copy + open-in-new-tab, modal stays open) and polls
@@ -341,16 +341,12 @@ type traeCheckin struct {
 	Enable    bool  `json:"enable"`
 }
 
-// buildDashboard aggregates every Trae SOLO CN credential from the host auth
+// buildDashboard aggregates every trae-cn credential from the host auth
 // store, plus a snapshot of credits / checkin status from the account cache
-// (or live upstream if the cache is stale).
+// (or live upstream if the cache is stale). Stored solo accounts are
+// included via the safe-reader fallback (verbatim SOLO badge); trae
+// (intl) accounts ride their own /intl/accounts endpoint.
 func buildDashboard() map[string]any {
-	// v0.12.27: migrate shared-namespace solo credentials FIRST (rename +
-	// re-register) so the inventory below and the heal scan both see the
-	// final names. Idempotent; a no-op once every solo file is namespaced.
-	if n := migrateSoloFileNames(); n > 0 {
-		log.Printf("trae dashboard: migrated %d solo credential(s) into the solo namespace", n)
-	}
 	// v0.12.26: heal next — if the host's manager dropped any on-disk
 	// credential (torn-read reconciliation, see heal.go), re-register it so
 	// the panel reflects the REAL credential inventory, not the manager's.
@@ -491,7 +487,7 @@ type rpcHostAuthGetResponse struct {
 	JSON      json.RawMessage `json:"json"`
 }
 
-// hostAuthList returns all Trae SOLO CN credentials known to the host. We
+// hostAuthList returns all trae credentials known to the host. We
 // filter by filename prefix because some legacy auth files don't carry a
 // "type"/"provider" field (pre-config-convention files).
 func hostAuthList() ([]pluginapi.HostAuthFileEntry, error) {
@@ -524,7 +520,9 @@ type storedAuth struct {
 	Account storedAccount `json:"account"`
 	// Variant is not persisted separately (it lives in Auth in the JSON);
 	// it is resolved at load time (hostAuthGet) so management operations
-	// hit the right upstream endpoints for cn/solo/intl accounts (v0.12.2).
+	// hit the right upstream endpoints for trae-cn/trae accounts.
+	// Stored solo spellings survive verbatim here (SOLO badge) and route
+	// via normalizeVariant at each decision point.
 	Variant string `json:"-"`
 }
 
@@ -580,7 +578,7 @@ func hostAuthGet(authIndex string) (*storedAuth, error) {
 }
 
 // hostAuthAsUpstream converts the host-stored nested shape into the upstream
-// *auth.Auth the trae-solo-cn upstream client expects.
+// *auth.Auth the trae upstream client expects.
 func hostAuthAsUpstream(sa *storedAuth) *auth.Auth {
 	deviceID := sa.Auth.DeviceID
 	if deviceID == "" {
@@ -604,14 +602,14 @@ func hostAuthAsUpstream(sa *storedAuth) *auth.Auth {
 	}
 }
 
-// isIntlStoredAuth reports whether the account lives on the intl realm and
-// therefore must use the intl faces (chat via intlupstream, billing via
-// intl_pay.go's grow-normal.trae.ai + v1) instead of the CN ones.
+// isIntlStoredAuth reports whether the account lives on the trae (intl)
+// region and therefore must use the intl faces (chat via intlupstream,
+// billing via intl_pay.go's grow-normal.trae.ai + v1) instead of the CN ones.
 func isIntlStoredAuth(sa *storedAuth) bool {
 	if sa == nil {
 		return false
 	}
-	if strings.EqualFold(strings.TrimSpace(sa.Variant), "intl") {
+	if normalizeVariant(sa.Variant) == variantIntl {
 		return true
 	}
 	d := strings.ToLower(strings.TrimSpace(sa.Auth.Domain))
@@ -684,7 +682,7 @@ func notifyCheckinRateLimited(err error) {
 
 // handleManualCheckin triggers checkin for one (auth_index) or all accounts.
 // Body: {"auth_index":"<idx>","uid":"<uid>"} — empty / omitted triggers all.
-// v0.12.28: uid 兼底匹配。凭证文件被 migrate/heal/adopt 改名或宿主管理器
+// v0.12.28: uid 兼底匹配。凭证文件被 heal/adopt 改名或宿主管理器
 // 重建后 auth_index 会变化，面板仍持旧 index 点击签到会匹配 0 个文件；
 // 此时改按 uid 匹配（uid 稳定），并把实际使用的 auth_index 回传给面板。
 func handleManualCheckin(req pluginapi.ManagementRequest) map[string]any {
@@ -702,7 +700,7 @@ func handleManualCheckin(req pluginapi.ManagementRequest) map[string]any {
 		return map[string]any{"error": err.Error()}
 	}
 	// v0.12.28: auth_index 失效检测。面板传了 index 却匹配不到任何文件
-	// （凭证被 migrate/heal/adopt 改名或宿主重建过），改按 uid 匹配；
+	// （凭证被 heal/adopt 改名或宿主重建过），改按 uid 匹配；
 	// 两者都匹配不到时返回明确的 stale_index 错误而不是空 results
 	// （空 results 曾被面板渲染成"签到完成"假成功）。
 	targets := make([]pluginapi.HostAuthFileEntry, 0, len(files))
@@ -1036,8 +1034,8 @@ func refreshAccountCredits(f pluginapi.HostAuthFileEntry, sa *storedAuth, a *aut
 	}
 	sum, plan, selected := summarizeEntUsage(usage, true)
 	// v0.12.29: ide_user_pay_status —— 上游刷新链路的第二个数据源
-	// （trae_account_core_refresh.rs 先 pay_status 再 ent_usage）。Free CN/SOLO
-	// 的 ent_usage pack 里没有可解析 quota，剩余维度（快请求/月、SOLO 并发）
+	// （trae_account_core_refresh.rs 先 pay_status 再 ent_usage）。Free trae-cn
+	// 的 ent_usage pack 里没有可解析 quota，剩余维度（快请求/月、并发）
 	// 只在 pay_status 的 detail/quota 里。best-effort：失败不阻塞 credits。
 	if ps, psErr := upstreamClient.PayStatus(a); psErr == nil && ps.Code == 0 {
 		sum.FastRequestPer = ps.FastRequestPer()
@@ -1143,8 +1141,8 @@ func summarizeEntUsage(usage *upstream.EntUsageResult, isCN bool) (upstream.Usag
 
 // finalizeAccountCredits projects the usage summary onto the management entry
 // and stores the accountCache (+ optionally accountPool) snapshot. Shared by
-// the CN/SOLO and Intl data paths (v0.12.72 extraction — behavior-preserving
-// for CN/SOLO).
+// the trae-cn and trae data paths (v0.12.72 extraction — behavior-preserving
+// for trae-cn).
 func finalizeAccountCredits(f pluginapi.HostAuthFileEntry, sa *storedAuth, entry map[string]any, sum upstream.UsageSummary, plan string, bind *bindStatus, wallet int64, checkedIn, enable, poolEligible bool) map[string]any {
 	entry["usage_model"] = sum.UsageModel
 	entry["remain_known"] = sum.RemainKnown
@@ -1168,7 +1166,7 @@ func finalizeAccountCredits(f pluginapi.HostAuthFileEntry, sa *storedAuth, entry
 		entry["fast_limit"] = sum.FastLimit
 		entry["fast_used"] = sum.FastUsed
 	}
-	// v0.12.29: pay_status 补充维度透传（面板"快请求/月 / Solo 并发"）。
+	// v0.12.29: pay_status 补充维度透传（面板"快请求/月 / 并发"）。
 	if sum.FastRequestPer != nil {
 		entry["fast_request_per"] = *sum.FastRequestPer
 	}
@@ -1218,7 +1216,7 @@ func finalizeAccountCredits(f pluginapi.HostAuthFileEntry, sa *storedAuth, entry
 	// trae exposes no reset-window bounds → the note shows the no-window
 	// fallback until one can be parsed.
 	usageQuotaStampFromSummary(f.AuthIndex, sum)
-	// v0.12.72: pool mutations stay CN/SOLO-only (poolEligible) — the
+	// v0.12.72: pool mutations stay trae-cn-only (poolEligible) — the
 	// scheduler pool semantics are CN-tuned and intl chat routing does not
 	// flow through it.
 	if poolEligible && accountPool != nil {
@@ -1248,7 +1246,7 @@ func refreshAccountCreditsIntl(f pluginapi.HostAuthFileEntry, sa *storedAuth, en
 	}
 	usageResp, err := intlEntUsage(sa.Auth.AccessToken, sa.Auth.Region, deviceID)
 	if err != nil {
-		entry["error"] = "intl ent_usage: " + err.Error()
+		entry["error"] = "trae ent_usage: " + err.Error()
 		// v0.12.75: 与 CN 路径同一把尺——过期 token 的 session_dead 失败附上
 		// 先刷新/需重登的指引与 token_expired 标记。
 		annotateStaleToken(entry, err, sa.Auth.ExpiresAt, time.Now().Unix())
@@ -1269,8 +1267,8 @@ func refreshAccountCreditsIntl(f pluginapi.HostAuthFileEntry, sa *storedAuth, en
 			}
 		}
 	}
-	entry["variant"] = "intl"
-	// No check-in on intl: wallet=-1 keeps checkin fields out of the entry.
+	entry["variant"] = variantIntl
+	// No check-in on trae: wallet=-1 keeps checkin fields out of the entry.
 	return finalizeAccountCredits(f, sa, entry, sum, plan, &bindStatus{}, -1, false, false, false)
 }
 func max64(a, b int64) int64 {
@@ -1382,8 +1380,8 @@ func storageJSONForAuth(a *auth.Auth) []byte {
 			"apiHost":      a.APIHost,
 			"machineId":    a.MachineID,
 			"deviceId":     a.DeviceID,
-			// v0.12.6: keep the parsed variant — dropping it made a solo
-			// account degrade to cn on refresh/import.
+			// v0.12.6: keep the parsed region — dropping it misroutes accounts
+			// on refresh/import.
 			"variant": a.Variant,
 			// v0.12.73: 设备密钥对随宿主副本回写 —— 绑定续期靠它签名，丢了
 			// 就只能走 /cloudide 裸续期（9074 根因）。
@@ -1460,7 +1458,7 @@ func persistRefreshedAuth(req pluginapi.ExecutorRequest, a *auth.Auth) {
 	// Derive file name from auth ID or StorageJSON.
 	fileName := req.AuthID
 	if fileName == "" {
-		// v0.12.27: per-variant fallback naming (solo → its own namespace).
+		// Canonical region file name for the refreshed credential.
 		fileName = credentialFileName(a.Variant, a.UID)
 	} else if !strings.HasSuffix(strings.ToLower(fileName), ".json") {
 		// v0.12.8: a uid-shaped AuthID would land as an extension-less
@@ -1496,8 +1494,9 @@ func handleImportAuth(req pluginapi.ManagementRequest) map[string]any {
 	}
 	// Build nested storage JSON for host.auth.save (v0.12.38: shared builder).
 	storageJSON := storageJSONForAuth(a)
-	// v0.12.27: per-variant namespace — an imported solo credential must
-	// not overwrite the cn file of the same Trae account.
+	// Canonical region file name (stored solo spellings normalize to
+	// trae-cn via credentialFileName; their raw variant stays in the file
+	// for the verbatim SOLO badge).
 	fileName := credentialFileName(a.Variant, a.UID)
 	if err := hostAuthSave(fileName, storageJSON); err != nil {
 		return map[string]any{"success": false, "error": err.Error()}

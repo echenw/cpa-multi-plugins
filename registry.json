@@ -38,7 +38,7 @@
     {
       "id": "trae",
       "name": "Trae",
-      "description": "Trae unified provider for CPA (merged v0.12.0): Trae Code CN (api.trae.cn inline_chat), Trae SOLO CN (solo_work_lite) and Trae Intl (api.marscode.com Web SOLO) in one plugin, per-variant routing, real-time SSE, daily check-in, auto-adopts legacy trae-cn / trae-solo-cn / trae-intl auth files.",
+      "description": "Trae unified provider for CPA (merged v0.12.0): Trae CN (trae-cn, api.trae.cn) and Trae Intl (trae, api.marscode.com Web SOLO) in one plugin, per-region routing, real-time SSE, daily check-in, auto-adopts legacy trae-cn / trae-intl auth files.",
       "author": "REPLACE_ME",
       "version": "0.1.0",
       "repository": "REPLACE_ME",

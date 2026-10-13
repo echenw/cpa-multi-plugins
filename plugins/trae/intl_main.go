@@ -243,12 +243,12 @@ func intlhandleModelForAuth(request []byte) ([]byte, error) {
 	a, err := intlparseStoredAuth(req.StorageJSON)
 	if err != nil {
 		log.Printf("intl model.for_auth: parse storage failed (%v) — static fallback", err)
-		return okEnvelope(pluginapi.ModelResponse{Provider: intlproviderName, Models: filterExcludedModels(intlstaticModels(), req.Host, providerName+"-intl")})
+		return okEnvelope(pluginapi.ModelResponse{Provider: intlproviderName, Models: filterExcludedModels(intlstaticModels(), req.Host, variantIntl)})
 	}
 	out := intlmodelCatalogForAuth(req.StorageJSON, req.AuthID, a)
-	// v0.12.62: the intl namespace honors the provider key plus the
-	// "trae-intl" sub-key.
-	out = filterExcludedModels(out, req.Host, providerName+"-intl")
+	// v0.12.62: the trae namespace honors the provider key plus the
+	// "trae" region sub-key (coincides with the provider key — idempotent).
+	out = filterExcludedModels(out, req.Host, variantIntl)
 	return okEnvelope(pluginapi.ModelResponse{Provider: intlproviderName, Models: out})
 }
 
@@ -308,9 +308,9 @@ func intlmodelCatalogForAuth(storageJSON []byte, authID string, a *upstream.Auth
 }
 
 func intlstaticModels() []pluginapi.ModelInfo {
-	// "-intl" suffix namespaces Intl models so host routing can never send
-	// a CN/SOLO-model request to an Intl credential (or vice versa).
-	// "auto"/"work" are Intl-exclusive virtual names and stay unsuffixed.
+	// "-intl" suffix namespaces trae models so host routing can never send
+	// a trae-cn-model request to a trae credential (or vice versa).
+	// "auto"/"work" are trae-exclusive virtual names and stay unsuffixed.
 	known := []string{"auto", "work", "gpt-5.2-intl", "gemini-3.1-pro-intl", "kimi-k2.5-intl", "claude-sonnet-4-5-intl"}
 	out := make([]pluginapi.ModelInfo, 0, len(known))
 	for _, id := range known {
@@ -331,7 +331,7 @@ func intlstaticModels() []pluginapi.ModelInfo {
 // unknown model_name. An empty resolved id (hosts that never populate
 // ExecutorRequest.Model) falls back to the body name, the pre-0.12.59
 // behavior. The mismatch is logged once per distinct body name through
-// the CN upstream's shared diagnostic.
+// the trae-cn upstream's shared diagnostic.
 func intlResolvedModel(resolved, bodyModel string) string {
 	r := strings.TrimSpace(resolved)
 	if r == "" {
@@ -339,7 +339,7 @@ func intlResolvedModel(resolved, bodyModel string) string {
 	}
 	if b := strings.TrimSpace(bodyModel); b != "" && b != r {
 		if strings.TrimSuffix(b, "-intl") != strings.TrimSuffix(r, "-intl") {
-			cnupstream.NoteHostPrefixMismatch(b, r, "intl")
+			cnupstream.NoteHostPrefixMismatch(b, r, variantIntl)
 		}
 	}
 	return r
@@ -493,13 +493,13 @@ func intlhandleParseAuth(request []byte) ([]byte, error) {
 		Handled: true,
 		Auth: pluginapi.AuthData{
 			// v0.12.8: leave ID empty — host derives it from the file path
-			// (same rationale as the cn/solo parse handler).
+			// (same rationale as the trae-cn parse handler).
 			Provider:    intlproviderName,
 			ID:          "",
 			FileName:    intlnonEmpty(req.FileName, intlauthFileName),
-			Label:       intlnonEmpty(a.Nickname, "Trae Intl "+a.UID),
+			Label:       intlnonEmpty(a.Nickname, "trae "+a.UID),
 			StorageJSON: payload,
-			Metadata:    map[string]any{"type": intlproviderName, "uid": a.UID, "note": "INTL"},
+			Metadata:    map[string]any{"type": intlproviderName, "uid": a.UID, "note": "trae"},
 		},
 	})
 }
@@ -562,7 +562,7 @@ func intlhandleStartLogin(request []byte) ([]byte, error) {
 		AppVersion:    loadedAppVersion(),
 		AppType:       intlOauthAppType,
 		CodeChallenge: codeChallenge,
-		HideSaasLogin: false, // Intl non-SOLO does not hide SaaS login
+		HideSaasLogin: false, // trae region never hides SaaS login
 	})
 
 	// Supersede any previous pending intl login (single pending-login slot,
@@ -790,8 +790,8 @@ func intlhandlePollLogin(request []byte) ([]byte, error) {
 	if err != nil {
 		log.Printf("GetUserInfo failed: %v — proceeding with callback/unknown identity", err)
 	}
-	// v0.12.25: identity chain (see handlePollLogin CN) — intl realm.
-	a.UID = resolveLoginUID(uid, lc.cbUID, "intl")
+	// v0.12.25: identity chain (see handlePollLogin trae-cn) — trae region.
+	a.UID = resolveLoginUID(uid, lc.cbUID, variantIntl)
 	a.Nickname = resolveLoginNickname(nickname, lc.cbNickname)
 	a.EnterpriseID = entID
 	// v0.12.44: credential parity extras (platformId/authClientId/exchange
@@ -810,7 +810,7 @@ func intlhandlePollLogin(request []byte) ([]byte, error) {
 		// empty on the intl pay face).
 		"machineId":        lc.machineID,
 		"deviceId":         lc.deviceID,
-		"variant":          "intl",
+		"variant":          variantIntl,
 		"region":           a.Region,
 		"scope":            a.Scope,
 		"tenant":           a.Tenant,
@@ -824,7 +824,7 @@ func intlhandlePollLogin(request []byte) ([]byte, error) {
 		"enterpriseId": a.EnterpriseID,
 		"nickname":     a.Nickname,
 	}
-	authExtras, accountExtras := credentialParityFields("intl", lc.loginHost, tokenRaw, nil)
+	authExtras, accountExtras := credentialParityFields(variantIntl, lc.loginHost, tokenRaw, nil)
 	for k, v := range authExtras {
 		if _, exists := authFields[k]; !exists { // intl 固有字段优先
 			authFields[k] = v
@@ -852,9 +852,9 @@ func intlhandlePollLogin(request []byte) ([]byte, error) {
 			Provider:    intlproviderName,
 			ID:          fmt.Sprintf("%s-%s.json", intlproviderName, a.UID),
 			FileName:    fmt.Sprintf("%s-%s.json", intlproviderName, a.UID),
-			Label:       intlnonEmpty(a.Nickname, "Trae Intl "+a.UID),
+			Label:       intlnonEmpty(a.Nickname, "trae "+a.UID),
 			StorageJSON: storageJSON,
-			Metadata:    map[string]any{"type": intlproviderName, "uid": a.UID, "nickname": a.Nickname, "note": "INTL"},
+			Metadata:    map[string]any{"type": intlproviderName, "uid": a.UID, "nickname": a.Nickname, "note": "trae"},
 		},
 	})
 }
@@ -886,7 +886,7 @@ func intlhandleRefreshAuth(request []byte) ([]byte, error) {
 			"deviceId":         a.DeviceID,
 			"devicePublicKey":  a.DevicePublicKey,
 			"devicePrivateKey": a.DevicePrivateKey,
-			"variant":          "intl",
+			"variant":          variantIntl,
 			"region":           a.Region,
 			"scope":            a.Scope,
 			"tenant":           a.Tenant,
@@ -906,9 +906,9 @@ func intlhandleRefreshAuth(request []byte) ([]byte, error) {
 			Provider:    intlproviderName,
 			ID:          "",
 			FileName:    fmt.Sprintf("%s-%s.json", intlproviderName, a.UID),
-			Label:       intlnonEmpty(a.Nickname, "Trae Intl "+a.UID),
+			Label:       intlnonEmpty(a.Nickname, "trae "+a.UID),
 			StorageJSON: storageJSON,
-			Metadata:    map[string]any{"type": intlproviderName, "uid": a.UID, "note": "INTL"},
+			Metadata:    map[string]any{"type": intlproviderName, "uid": a.UID, "note": "trae"},
 		},
 		NextRefreshAfter: time.Now().Add(12 * time.Hour).UTC(),
 	})
@@ -1293,7 +1293,7 @@ func intlHandleCallbackConn(conn net.Conn, lc *intlloginCtx) bool {
 	}
 	vals, _ := url.ParseQuery(rest[q+1:])
 
-	// Error path (same parameter names as the CN/SOLO callback).
+	// Error path (same parameter names as the trae-cn callback).
 	for _, k := range []string{"error", "error_code", "err", "errorCode"} {
 		if ev := vals.Get(k); ev != "" {
 			lc.err = fmt.Errorf("oauth callback error: %s=%s", k, ev)

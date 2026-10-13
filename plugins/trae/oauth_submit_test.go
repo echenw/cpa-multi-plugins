@@ -64,7 +64,7 @@ func TestHandleOAuthSubmitResourcePOST(t *testing.T) {
 
 func TestHandleOAuthSubmitResourceGETCBURL(t *testing.T) {
 	state := "test-submit-cn-002"
-	lc := &loginCtx{variant: variantSolo, state: state, loginTraceID: state, expires: time.Now().Add(time.Minute)}
+	lc := &loginCtx{variant: variantCN, state: state, loginTraceID: state, expires: time.Now().Add(time.Minute)}
 	loginStates.Store(state, lc)
 	defer loginStates.Delete(state)
 

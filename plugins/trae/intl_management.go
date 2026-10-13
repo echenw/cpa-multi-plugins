@@ -419,8 +419,8 @@ func intlpersistRefreshedAuthTo(fileName string, a *upstream.Auth) {
 			"expiresAt":    a.ExpiresAt,
 			"domain":       a.Domain,
 			"apiHost":      a.APIHost,
-			// v0.12.6: match the login path — stamp intl explicitly.
-			"variant":     "intl",
+			// v0.12.6: match the login path — stamp trae explicitly.
+			"variant":     variantIntl,
 			"region":      a.Region,
 			"scope":       a.Scope,
 			"tenant":      a.Tenant,
@@ -466,8 +466,8 @@ func intlhandleImportAuth(req pluginapi.ManagementRequest) map[string]any {
 			"expiresAt":    a.ExpiresAt,
 			"domain":       a.Domain,
 			"apiHost":      a.APIHost,
-			// v0.12.6: match the login path — stamp intl explicitly.
-			"variant":     "intl",
+			// v0.12.6: match the login path — stamp trae explicitly.
+			"variant":     variantIntl,
 			"region":      a.Region,
 			"scope":       a.Scope,
 			"tenant":      a.Tenant,

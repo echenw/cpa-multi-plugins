@@ -96,14 +96,18 @@ func TestPersistedSnapshotServedOnDiscoveryFailure(t *testing.T) {
 	}
 }
 
-// TestPersistedSnapshotSameVariantOnly proves the peer scan never crosses the
-// variant namespace: a cn credential falls back to a cn peer's snapshot, and
-// a solo credential (whose advertised ids carry the -solo suffix) only to a
-// solo peer — a cross-variant snapshot would hand the host unroutable ids.
-func TestPersistedSnapshotSameVariantOnly(t *testing.T) {
+// TestPersistedSnapshotSameRegionOnly proves the peer scan never crosses the
+// region namespace: a trae-cn credential falls back to a trae-cn peer's
+// snapshot (legacy "cn"-realm snapshots stay readable), a trae credential
+// only to a trae peer — and the retired "solo"-realm snapshot never serves
+// anyone (its ids carry the deleted "-solo" namespace). A stored solo
+// credential (raw "solo") shares the trae-cn route, so it is served by the
+// trae-cn peer snapshot instead of crashing.
+func TestPersistedSnapshotSameRegionOnly(t *testing.T) {
 	restoreSeams := stubPersistSeams(t, map[string][]byte{
 		"cn":   mustPersistCache(t, persistTestStorage("tok-peer-cn", "cn", ""), "cn", "2026-09-27T01:00:00Z", variantTestModels("m-cn-peer")),
 		"solo": mustPersistCache(t, persistTestStorage("tok-peer-solo", "solo", ""), "solo", "2026-09-27T01:00:00Z", variantTestModels("m-solo-peer-solo")),
+		"intl": mustPersistCache(t, persistTestStorage("tok-peer-intl", "intl", ""), "intl", "2026-09-27T01:00:00Z", variantTestModels("m-intl-peer-intl")),
 	})
 	defer restoreSeams()
 	restore := stubCNDiscovery(t, func(a *auth.Auth) ([]upstream.ModelInfo, error) {
@@ -122,8 +126,8 @@ func TestPersistedSnapshotSameVariantOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse solo: %v", err)
 	}
-	if got := modelsForVariant(aSolo, persistTestStorage("tok-ask-solo", "solo", "")); len(got) != 1 || got[0].ID != "m-solo-peer-solo" {
-		t.Fatalf("solo ask: want solo peer snapshot, got %+v", got)
+	if got := modelsForVariant(aSolo, persistTestStorage("tok-ask-solo", "solo", "")); len(got) != 1 || got[0].ID != "m-cn-peer" {
+		t.Fatalf("stored solo ask: want trae-cn peer snapshot (fallback), got %+v", got)
 	}
 }
 
@@ -132,15 +136,15 @@ func TestPersistedSnapshotSameVariantOnly(t *testing.T) {
 // snapshot write must happen exactly once per real catalog change, and the
 // merge must preserve unknown top-level keys.
 func TestPersistModelSnapshotOnlyWritesOnChange(t *testing.T) {
-	selfDoc := []byte(`{"type":"trae","provider":"trae","auth":{"accessToken":"tok-self","variant":"cn"},"account":{"uid":"u1"},"note":"keep me"}`)
+	selfDoc := []byte(`{"type":"trae","provider":"trae","auth":{"accessToken":"tok-self","variant":"trae-cn"},"account":{"uid":"u1"},"note":"keep me"}`)
 	restoreSeams := stubPersistSeams(t, map[string][]byte{"self": selfDoc})
 	defer restoreSeams()
 
-	ask := persistTestStorage("tok-self", "cn", "")
+	ask := persistTestStorage("tok-self", "trae-cn", "")
 	models := variantTestModels("m1", "m2")
 
-	persistModelSnapshot(ask, "cn", models)
-	persistModelSnapshot(ask, "cn", models) // unchanged → no second save
+	persistModelSnapshot(ask, variantCN, models)
+	persistModelSnapshot(ask, variantCN, models) // unchanged → no second save
 	if n := len(saveCalls()); n != 1 {
 		t.Fatalf("saves after duplicate persist = %d, want 1", n)
 	}
@@ -157,11 +161,11 @@ func TestPersistModelSnapshotOnlyWritesOnChange(t *testing.T) {
 	if err := json.Unmarshal(saved["model_cache"], &cache); err != nil {
 		t.Fatalf("model_cache unreadable: %v", err)
 	}
-	if cache.Realm != "cn" || len(cache.Models) != 2 || cache.Models[0].ID != "m1" {
+	if cache.Realm != variantCN || len(cache.Models) != 2 || cache.Models[0].ID != "m1" {
 		t.Fatalf("persisted snapshot wrong: %+v", cache)
 	}
 
-	persistModelSnapshot(ask, "cn", variantTestModels("m1", "m2", "m3"))
+	persistModelSnapshot(ask, variantCN, variantTestModels("m1", "m2", "m3"))
 	if n := len(saveCalls()); n != 2 {
 		t.Fatalf("saves after catalog change = %d, want 2", n)
 	}
@@ -172,15 +176,15 @@ func TestPersistModelSnapshotOnlyWritesOnChange(t *testing.T) {
 // WITHOUT model_cache; the funnel must re-inject the persisted snapshot from
 // the physical file, and a caller-supplied key must win.
 func TestPreservePluginDocKeysRestoresModelCache(t *testing.T) {
-	snap := &persistedModelCache{Realm: "intl", FetchedAt: "2026-09-27T00:00:00Z", Models: variantTestModels("m-keep")}
-	physDoc, err := mergeModelCacheIntoDoc(persistTestStorage("tok-live", "intl", ""), snap)
+	snap := &persistedModelCache{Realm: variantIntl, FetchedAt: "2026-09-27T00:00:00Z", Models: variantTestModels("m-keep")}
+	physDoc, err := mergeModelCacheIntoDoc(persistTestStorage("tok-live", "trae", ""), snap)
 	if err != nil {
 		t.Fatalf("merge: %v", err)
 	}
 	restoreSeams := stubPersistSeams(t, map[string][]byte{"live": physDoc})
 	defer restoreSeams()
 
-	rebuilt := []byte(`{"type":"trae","provider":"trae","auth":{"accessToken":"tok-live","variant":"intl"},"account":{"uid":"u1"},"disabled":false}`)
+	rebuilt := []byte(`{"type":"trae","provider":"trae","auth":{"accessToken":"tok-live","variant":"trae"},"account":{"uid":"u1"},"disabled":false}`)
 	merged := preservePluginDocKeys("trae-live.json", rebuilt)
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(merged, &m); err != nil {
@@ -227,9 +231,12 @@ func groupsByVariant(t *testing.T, payload any) map[string]modelGroup {
 	return out
 }
 
-// TestModelGroupsSnapshotAggregation pins the read-only path: per variant the
-// NEWEST same-variant snapshot wins, variants without credentials render
+// TestModelGroupsSnapshotAggregation pins the read-only path: per region the
+// NEWEST same-region snapshot wins, regions without credentials render
 // empty with needs_refresh, and the group carries credential counts.
+// A stored solo file lands in the trae-cn group (sniff normalizes), but its
+// stale "solo"-realm snapshot never serves; legacy "cn"/"intl" realms stay
+// readable via sameSnapshotRealm.
 func TestModelGroupsSnapshotAggregation(t *testing.T) {
 	cnDoc, err := mergeModelCacheIntoDoc(persistTestStorage("tok-cn", "cn", ""),
 		&persistedModelCache{Realm: "cn", FetchedAt: "2026-09-27T00:00:00Z", Models: variantTestModels("m-cn-a", "m-cn-b")})
@@ -256,22 +263,19 @@ func TestModelGroupsSnapshotAggregation(t *testing.T) {
 	}
 	groups := groupsByVariant(t, payload)
 
-	gCN := groups["cn"]
-	if gCN.Count != 2 || gCN.Source != "snapshot" || gCN.Credentials != 1 {
-		t.Fatalf("cn group = source %q count %d creds %d", gCN.Source, gCN.Count, gCN.Credentials)
+	gCN := groups[variantCN]
+	if gCN.Count != 2 || gCN.Source != "snapshot" || gCN.Credentials != 2 {
+		t.Fatalf("trae-cn group = source %q count %d creds %d (want snapshot/2/2: cn + stored-solo files)", gCN.Source, gCN.Count, gCN.Credentials)
 	}
 	if gCN.Models[0].ID != "m-cn-a" {
-		t.Fatalf("cn model = %q", gCN.Models[0].ID)
+		t.Fatalf("trae-cn model = %q (the retired solo-realm snapshot must not serve)", gCN.Models[0].ID)
 	}
-	if groups["solo"].Count != 1 || groups["solo"].Models[0].ID != "m-solo-1-solo" {
-		t.Fatalf("solo group wrong: %+v", groups["solo"].Models)
-	}
-	if groups["intl"].Count != 2 {
-		t.Fatalf("intl group = %d, want 2 (suffix + virtuals ride the snapshot)", groups["intl"].Count)
+	if groups[variantIntl].Count != 2 {
+		t.Fatalf("trae group = %d, want 2 (suffix + virtuals ride the snapshot)", groups[variantIntl].Count)
 	}
 }
 
-// TestModelGroupsRefresh pins ?refresh=1 for the cn lane: the live discovery
+// TestModelGroupsRefresh pins ?refresh=1 for the trae-cn lane: the live discovery
 // answer takes precedence over the snapshot, and the snapshot is the
 // fallback when the upstream is down — the exact for_auth contract.
 func TestModelGroupsRefresh(t *testing.T) {
@@ -286,8 +290,8 @@ func TestModelGroupsRefresh(t *testing.T) {
 
 	// Fresh discovery wins.
 	restore := stubCNDiscovery(t, func(a *auth.Auth) ([]upstream.ModelInfo, error) {
-		if a.Variant != variantCN {
-			return nil, errors.New("wrong variant asked: " + a.Variant)
+		if normalizeVariant(a.Variant) != variantCN {
+			return nil, errors.New("wrong region asked: " + a.Variant)
 		}
 		return []upstream.ModelInfo{{ID: "m-fresh-1", Name: "Fresh One"}, {ID: "m-fresh-2", Name: "Fresh Two"}}, nil
 	})
@@ -297,7 +301,7 @@ func TestModelGroupsRefresh(t *testing.T) {
 	if status != 200 {
 		t.Fatalf("status = %d", status)
 	}
-	cnGroup := groupsByVariant(t, payload)["cn"]
+	cnGroup := groupsByVariant(t, payload)[variantCN]
 	if cnGroup.Source != "refreshed" || cnGroup.Count != 2 || cnGroup.Models[0].ID != "m-fresh-1" {
 		t.Fatalf("refresh group = source %q count %d — fresh discovery should win", cnGroup.Source, cnGroup.Count)
 	}
@@ -313,7 +317,7 @@ func TestModelGroupsRefresh(t *testing.T) {
 	if status != 200 {
 		t.Fatalf("status = %d", status)
 	}
-	cnGroup = groupsByVariant(t, payload)["cn"]
+	cnGroup = groupsByVariant(t, payload)[variantCN]
 	if cnGroup.Count != 2 || cnGroup.Models[0].ID != "m-fresh-1" {
 		t.Fatalf("refresh fallback should serve the freshly re-stamped snapshot, got %+v", cnGroup.Models)
 	}

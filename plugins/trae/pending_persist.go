@@ -30,8 +30,7 @@ import (
 // persisted to <AuthDir>/.trae-pending-login.json at start-login and
 // transparently restored on the callback / submit / poll paths, so a paste
 // completes even after a restart. The file name is dot-prefixed so the
-// auth-file claim logic (adopt.go matches prefixes "trae-cn-", "trae-solo-cn-",
-// "trae-intl-") never mistakes it for a credential.
+// auth-file claim logic never mistakes it for a credential.
 // -----------------------------------------------------------------------------
 
 const pendingLoginFileName = ".trae-pending-login.json"
@@ -105,7 +104,7 @@ func selfCompleteIntlAfterGrace(lc *intlloginCtx, grace time.Duration) {
 // needed to resume a login after a process restart. No listener is carried:
 // resource flows (the paste path) never need one.
 type pendingLoginRecord struct {
-	Flow          string `json:"flow"` // "cn" (cn+solo) | "intl"
+	Flow          string `json:"flow"` // "cn" (trae-cn) | "intl" (trae)
 	State         string `json:"state"`
 	Variant       string `json:"variant,omitempty"`
 	LoginHost     string `json:"login_host,omitempty"`
@@ -272,9 +271,9 @@ func restorePendingLoginState(state string) string {
 			restored: true,
 		})
 		return rec.State
-	default: // "cn" — cn + solo share the flow map
+	default: // "cn" — the trae-cn flow
 		loginStates.Store(rec.State, &loginCtx{
-			listener: nil, variant: rec.Variant, state: rec.State, cbURL: rec.CbURL,
+			listener: nil, variant: normalizeVariant(rec.Variant), state: rec.State, cbURL: rec.CbURL,
 			expires: expires, loginTraceID: rec.State, codeVerifier: rec.CodeVerifier,
 			codeChallenge: rec.CodeChallenge, deviceID: rec.DeviceID,
 			machineID: rec.MachineID, authDir: dir,
@@ -346,7 +345,7 @@ func lookupLoginOutcome(state string) (loginOutcome, bool) {
 // up. Non-restored logins keep the host-poll path (single completion point).
 // -----------------------------------------------------------------------------
 
-// selfCompleteCN finishes a cn/solo login in-process (exchange + GetUserInfo
+// selfCompleteCN finishes a trae-cn login in-process (exchange + GetUserInfo
 // + credential file write). source tags the trigger path in logs/outcomes:
 // "restored" (post-restart paste) or "grace" (live login the host poll never
 // claimed within loginSelfCompleteGrace — v0.12.23).
@@ -385,7 +384,7 @@ func selfCompleteCN(lc *loginCtx, source string) {
 			DevicePublicKey:  lc.devicePublicKey,
 			DevicePrivateKey: lc.devicePrivateKey,
 			// v0.12.60: 同 oauth_callback——refreshLocked 以谱系选 OAuth
-			// ClientID，裸 Auth 缺 variant 会把 SOLO 凭证换发成 cn 类。
+			// ClientID，裸 Auth 按 normalizeVariant 默认解析。
 			Variant: lc.variant,
 		}
 		if err := upstreamClient.RefreshToken(a); err != nil {
@@ -446,9 +445,6 @@ func selfCompleteCN(lc *loginCtx, source string) {
 	// v0.12.25: GetUserInfo → callback userInfo echo → stable unknown
 	// fallback. The old per-login loginTraceID fallback minted a fresh
 	// trae-<uuid>.json per submission — the duplicate-account bug.
-	// v0.12.27: pass the login VARIANT (cn vs solo get distinct unknown
-	// fallbacks — a solo login no longer collides with a cn login whose
-	// identity also failed to resolve).
 	uid = resolveLoginUID(uid, lc.cbUID, lc.variant)
 	nickname = resolveLoginNickname(nickname, lc.cbNickname)
 	a.UID = uid
@@ -476,9 +472,7 @@ func selfCompleteCN(lc *loginCtx, source string) {
 		},
 		"disabled": false,
 	}, "", "  ")
-	// v0.12.27: per-variant namespace — solo credentials land in
-	// trae-solo-cn-<uid>.json instead of overwriting the cn file of the
-	// same Trae account (the "solo became init" overwrite bug).
+	// Canonical region file name for the completed login.
 	fileName := credentialFileName(lc.variant, uid)
 	if lc.authDir == "" {
 		fail("no AuthDir to write the credential file")

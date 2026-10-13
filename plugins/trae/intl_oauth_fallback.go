@@ -86,7 +86,7 @@ func intlcandidateAPIOorigins(loginHost string, cn bool) []string {
 		}
 	}
 	if cn {
-		// Not used by trae-intl (CN-only helpers live in trae-cn/trae-solo-cn);
+		// Not used by trae-intl (CN-only helpers live in trae-cn);
 		// kept for parity with the shared helper shape.
 		origins = append(origins, "https://api.trae.cn", "https://api.trae.com.cn")
 	} else {
