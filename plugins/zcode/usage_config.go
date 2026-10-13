@@ -224,6 +224,12 @@ func configure(raw []byte) {
 	startClaimSchedulerOnce()
 
 	resolveUsageReport(cfgURL, cfgKey)
+	// Shared usage feed for the standalone token-usage-tracker plugin
+	// (canonical T10, zcode copy T13: configure/record/append, O_APPEND,
+	// default <CPA root>/data/token-usage-feed.ndjson, rotation via
+	// maxUsageFeedBytes). Non-fatal by design: a failure only disables
+	// the feed, never chat.
+	configureUsageFeed(raw)
 }
 
 // resolveUsageReport fills usageReportURL/key from config → env → secret files.
