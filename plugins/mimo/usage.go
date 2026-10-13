@@ -43,6 +43,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
 const (
@@ -382,4 +385,63 @@ func refreshAllUsageNotes() {
 			return
 		}
 	}
+}
+
+// handleUsage is the UsagePlugin entry point (plan T14 adaptation): the host
+// calls this after every request with the canonical usage record, and we
+// append one NDJSON line to the shared token-usage feed for the standalone
+// token-usage-tracker plugin. mimo has no executor-side publishUsage and no
+// CPAMP forward, so this host callback is the sole write entry —
+// deliberately feed-only, unlike workbuddy's handleUsage which also feeds its
+// note ledger and CPAMP. Malformed records return the error to the host and
+// write nothing; foreign-provider records are declined (forwarded: false).
+// Known gaps inherited from the canonical path: no scheduler session key
+// (always "") and no internal account nickname (record.Source passed
+// through); see usage_feed.go.
+func handleUsage(raw []byte) ([]byte, error) {
+	var record pluginapi.UsageRecord
+	if err := json.Unmarshal(raw, &record); err != nil {
+		return nil, err
+	}
+	if record.Provider != "" && record.Provider != providerName {
+		return okEnvelope(map[string]any{"forwarded": false})
+	}
+	detail := usage.Detail{
+		InputTokens:         record.Detail.InputTokens,
+		OutputTokens:        record.Detail.OutputTokens,
+		ReasoningTokens:     record.Detail.ReasoningTokens,
+		CachedTokens:        record.Detail.CachedTokens,
+		CacheReadTokens:     record.Detail.CacheReadTokens,
+		CacheCreationTokens: record.Detail.CacheCreationTokens,
+		TotalTokens:         record.Detail.TotalTokens,
+	}
+	started := record.RequestedAt
+	if started.IsZero() {
+		started = time.Now().Add(-record.Latency)
+	}
+	alias := strings.TrimSpace(record.Alias)
+	model := strings.TrimSpace(record.Model)
+	if model == "" {
+		model = alias
+	}
+	if alias == "" {
+		alias = model
+	}
+	var ttftNS uint64
+	if record.TTFT > 0 {
+		ttftNS = uint64(record.TTFT)
+	}
+	recordUsageFeed(alias, model, record.AuthID, started, normalizeUsageDetail(detail), record.Failed, record.Failure.StatusCode, record.ReasoningEffort, ttftNS, record.Source, "")
+	return okEnvelope(map[string]any{"forwarded": true})
+}
+
+// normalizeUsageDetail recomputes TotalTokens from the parts when the host
+// reports 0 (canonical T10 semantics, shared with the feed writer).
+func normalizeUsageDetail(d usage.Detail) usage.Detail {
+	if d.TotalTokens == 0 {
+		if total := d.InputTokens + d.OutputTokens + d.ReasoningTokens; total > 0 {
+			d.TotalTokens = total
+		}
+	}
+	return d
 }

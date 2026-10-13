@@ -129,4 +129,10 @@ func configure(raw []byte) {
 		cookiePaths = paths
 		cookiePathsMu.Unlock()
 	}
+
+	// Plan T14: shared token-usage feed (usage_feed.go, workbuddy canonical).
+	// Parses usage_feed_* from the same lifecycle request; non-fatal by
+	// design — without it the feed path stays unset and recordUsageFeed is a
+	// no-op, so this call is what arms the MethodUsageHandle write path.
+	configureUsageFeed(raw)
 }

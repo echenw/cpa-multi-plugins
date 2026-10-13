@@ -309,6 +309,8 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 		return okEnvelope(mimoManagementRegistration())
 	case pluginabi.MethodManagementHandle:
 		return handleMimoManagement(request)
+	case pluginabi.MethodUsageHandle:
+		return handleUsage(request)
 	default:
 		return errorEnvelope("unknown_method", "unknown method: "+method), nil
 	}
@@ -362,9 +364,14 @@ type registrationCapability struct {
 }
 
 // mimoRegistration declares the plugin's capability surface. Scope is
-// deliberately narrow: models + auth + chat executor. No scheduler /
-// management / usage plugin — the host tracks usage from the upstream's
-// include_usage terminal chunk itself.
+// deliberately narrow: models + auth + chat executor. No scheduler — the
+// host tracks usage from the upstream's include_usage terminal chunk itself.
+//
+// Plan T14 adaptation: UsagePlugin is enabled (was false) so the host
+// delivers per-request UsageRecords to MethodUsageHandle, which appends one
+// NDJSON line to the shared token-usage feed (usage_feed.go, copied verbatim
+// from the workbuddy canonical). mimo has no executor-side publishUsage, so
+// the host callback is the sole write entry.
 func mimoRegistration() registration {
 	return registration{
 		SchemaVersion: pluginabi.SchemaVersion,
@@ -391,7 +398,7 @@ func mimoRegistration() registration {
 			ExecutorOutputFormats: []string{"chat-completions"},
 			Scheduler:             false,
 			ManagementAPI:         true, // v0.2.5: /oauth_submit paste-to-complete fallback
-			UsagePlugin:           false,
+			UsagePlugin:           true, // plan T14: host usage callback → shared token-usage feed
 		},
 	}
 }
