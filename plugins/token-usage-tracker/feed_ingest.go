@@ -1,0 +1,570 @@
+// feed_ingest.go implements the tracker plugin configuration, the bbolt store
+// lifecycle, the shared-usage-feed importer, and the statistics query bridge.
+//
+// Configuration (config_yaml, all optional):
+//
+//	management_key:        Bearer token for write endpoints (or env
+//	                       TOKEN_USAGE_TRACKER_MANAGEMENT_KEY)
+//	usage_feed_enabled:    tail the shared feed (default true)
+//	usage_feed_path:       shared NDJSON feed (default
+//	                       <CLIProxyAPI root>/data/token-usage-feed.ndjson)
+//	usage_db_path:         bbolt database (default
+//	                       <CLIProxyAPI root>/data/token-usage-tracker.db)
+//	usage_retention_days:  1-3650 (default 365)
+//	usage_flush_interval:  1s-1h (default 5s)
+//	usage_flush_max_records: 1-1000000 (default 100)
+//	usage_poll_interval:   feed poll interval, 1s-1h (default 5s)
+//
+// The importer is the ONLY process that writes the bbolt database (the
+// workbuddy plugin never touches it — it only appends to the feed). This
+// avoids the bbolt exclusive-flock conflict that two long-lived writers
+// would cause.
+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	usagestats "github.com/mmqz/cpa-multi-plugins/plugins/token-usage-tracker/usage_stats"
+)
+
+const (
+	defaultUsageRetentionDays   = 365
+	defaultUsageFlushInterval   = 5 * time.Second
+	defaultUsageFlushMaxRecords = 100
+	defaultUsagePollInterval    = 5 * time.Second
+	defaultUsageFeedFileName    = "token-usage-feed.ndjson"
+	defaultUsageDBFileName      = "token-usage-tracker.db"
+	// maxUsageFeedLineBytes guards against a corrupt/giant single line.
+	maxUsageFeedLineBytes = 1 << 20
+)
+
+// trackerConfig is the lock-protected plugin configuration snapshot.
+type trackerConfig struct {
+	ManagementKey            string
+	FeedEnabled              bool
+	FeedPath                 string
+	DBPath                   string
+	RetentionDays            int
+	FlushInterval            time.Duration
+	FlushMaxRecords          int
+	PollInterval             time.Duration
+	DerivedSessionEnabled    bool
+	DerivedSessionWindow     time.Duration
+}
+
+var (
+	trackerCfgMu  sync.RWMutex
+	trackerCfg = trackerConfig{
+		FeedEnabled:           true,
+		RetentionDays:         defaultUsageRetentionDays,
+		FlushInterval:         defaultUsageFlushInterval,
+		FlushMaxRecords:       defaultUsageFlushMaxRecords,
+		PollInterval:          defaultUsagePollInterval,
+		DerivedSessionEnabled: true,
+		DerivedSessionWindow:  usagestats.DefaultDerivedSessionWindow,
+	}
+)
+
+// Store lifecycle + feed importer state.
+var (
+	storeMu          sync.RWMutex
+	usageStore       *usagestats.Store
+	importerOnce     sync.Once
+	feedSyncMu       sync.Mutex
+	feedOffset       int64
+	feedOffsetLoaded bool
+)
+
+// configure parses config_yaml and (re)opens the store. Called from
+// register/reconfigure. Failures are non-fatal: the plugin keeps serving the
+// dashboard and only disables statistics ingestion.
+func configure(raw []byte) {
+	next := trackerConfig{
+		FeedEnabled:           true,
+		RetentionDays:         defaultUsageRetentionDays,
+		FlushInterval:         defaultUsageFlushInterval,
+		FlushMaxRecords:       defaultUsageFlushMaxRecords,
+		PollInterval:          defaultUsagePollInterval,
+		DerivedSessionEnabled: true,
+		DerivedSessionWindow:  usagestats.DefaultDerivedSessionWindow,
+	}
+	next.ManagementKey = strings.TrimSpace(os.Getenv("TOKEN_USAGE_TRACKER_MANAGEMENT_KEY"))
+
+	if len(raw) > 0 {
+		var req struct {
+			ConfigYAML []byte `json:"config_yaml"`
+		}
+		if err := json.Unmarshal(raw, &req); err == nil {
+			for _, line := range strings.Split(string(req.ConfigYAML), "\n") {
+				line = strings.TrimSpace(line)
+				value := func() string {
+					_, v, _ := strings.Cut(line, ":")
+					return strings.Trim(strings.TrimSpace(v), "\"'")
+				}
+				switch {
+				case strings.HasPrefix(line, "management_key:"):
+					if v := value(); v != "" {
+						next.ManagementKey = v
+					}
+				case strings.HasPrefix(line, "usage_feed_enabled:"):
+					v := value()
+					next.FeedEnabled = v == "true" || v == "1" || v == "yes" || v == "on"
+				case strings.HasPrefix(line, "usage_feed_path:"):
+					if v := value(); v != "" {
+						next.FeedPath = v
+					}
+				case strings.HasPrefix(line, "usage_db_path:"):
+					if v := value(); v != "" {
+						next.DBPath = v
+					}
+				case strings.HasPrefix(line, "usage_retention_days:"):
+					if n, err := strconv.Atoi(value()); err == nil && n >= 1 && n <= 3650 {
+						next.RetentionDays = n
+					}
+				case strings.HasPrefix(line, "usage_flush_interval:"):
+					if d, err := time.ParseDuration(value()); err == nil && d >= time.Second && d <= time.Hour {
+						next.FlushInterval = d
+					}
+				case strings.HasPrefix(line, "usage_flush_max_records:"):
+					if n, err := strconv.Atoi(value()); err == nil && n >= 1 && n <= 1_000_000 {
+						next.FlushMaxRecords = n
+					}
+				case strings.HasPrefix(line, "usage_poll_interval:"):
+					if d, err := time.ParseDuration(value()); err == nil && d >= time.Second && d <= time.Hour {
+						next.PollInterval = d
+					}
+				case strings.HasPrefix(line, "usage_derived_session_enabled:"):
+					v := value()
+					next.DerivedSessionEnabled = v == "true" || v == "1" || v == "yes" || v == "on"
+				case strings.HasPrefix(line, "usage_derived_session_window:"):
+					if d, err := time.ParseDuration(value()); err == nil && d > 0 {
+						next.DerivedSessionWindow = d
+					}
+				}
+			}
+		}
+	}
+	if next.FeedPath == "" {
+		next.FeedPath = usagestats.DefaultDataPath(defaultUsageFeedFileName)
+	}
+	if next.DBPath == "" {
+		next.DBPath = usagestats.DefaultDataPath(defaultUsageDBFileName)
+	}
+
+	trackerCfgMu.Lock()
+	trackerCfg = next
+	trackerCfgMu.Unlock()
+
+	reopenStore(next)
+	reg := trackerRegistration()
+	trackerInfof("configured: feed_enabled=%v feed=%s db=%s retention_days=%d flush=%s poll=%s", next.FeedEnabled, next.FeedPath, next.DBPath, next.RetentionDays, next.FlushInterval, next.PollInterval)
+	storeMu.RLock()
+	storeOpen := usageStore != nil
+	storeMu.RUnlock()
+	trackerInfof("store open: %v | version=%s capabilities: usage_plugin=%v management_api=%v", storeOpen, reg.Metadata.Version, reg.Capabilities.UsagePlugin, reg.Capabilities.ManagementAPI)
+	importerOnce.Do(func() {
+		go feedImporterLoop()
+	})
+}
+
+// appliedStoreKey 记录当前 usageStore 句柄所对应的存储配置指纹。宿主每次配置重载都会
+// 向所有插件推送 reconfigure，若据此无条件重开 store，就会给在途写入制造"句柄已关闭"窗口
+// 并丢掉那批记录；配置实质未变时必须复用现有句柄。
+// 最近修改时间：2026-10-11；改动原因：消除无关配置重载引发的丢记录窗口。
+var appliedStoreKey string
+
+// reopenStore opens (or re-opens) the bbolt store for the given config.
+//
+// When a new store replaces an old one, the old store is closed INSIDE the
+// storeMu critical section. Otherwise the feedImporterLoop may have already
+// captured the old reference under the read lock, return after we drop the
+// write lock, and discover the store closed mid-ingest. Closing inside the
+// critical section guarantees that any subsequent RLock sees usageStore
+// pointing at the new store, so old-store ingest calls quickly fail at the
+// Store.send() gate instead of panicking into the host's fusePlugin trap.
+func reopenStore(cfg trackerConfig) {
+	if !cfg.FeedEnabled {
+		storeMu.Lock()
+		appliedStoreKey = ""
+		if usageStore != nil {
+			_ = usageStore.Close()
+			usageStore = nil
+		}
+		storeMu.Unlock()
+		return
+	}
+	flushInterval := cfg.FlushInterval
+	if flushInterval <= 0 {
+		flushInterval = defaultUsageFlushInterval
+	}
+	flushMaxRecords := cfg.FlushMaxRecords
+	if flushMaxRecords <= 0 {
+		flushMaxRecords = defaultUsageFlushMaxRecords
+	}
+	retentionDays := cfg.RetentionDays
+	if retentionDays <= 0 {
+		retentionDays = defaultUsageRetentionDays
+	}
+	key := fmt.Sprintf("%s|%d|%v|%d|%v|%v", cfg.DBPath, retentionDays, flushInterval, flushMaxRecords, cfg.DerivedSessionEnabled, cfg.DerivedSessionWindow)
+	storeMu.RLock()
+	unchanged := usageStore != nil && appliedStoreKey == key
+	storeMu.RUnlock()
+	if unchanged {
+		trackerInfof("store config unchanged, keeping current handle")
+		return
+	}
+	next, err := usagestats.Open(usagestats.Config{
+		DataPath:             cfg.DBPath,
+		RetentionDays:        retentionDays,
+		FlushInterval:        flushInterval,
+		FlushMaxRecords:      flushMaxRecords,
+		// SyncOnRecord=false: batch durability. The store actor already keeps
+		// an in-memory dirty aggregate and only needs a bbolt transaction when
+		// FlushMaxRecords (default 100) is reached or the flush ticker fires.
+		// SyncOnRecord=true forced one bbolt transaction + fsync PER record,
+		// which turned a large feed backlog into seconds of serialized disk
+		// I/O and made concurrent dashboard reads queue behind it (request
+		// aborts). With batching, the write amplification drops ~100x; the
+		// only cost is a bounded loss window (~100 records / one flush
+		// interval) on hard crash, acceptable for usage statistics.
+		SyncOnRecord:         false,
+		DerivedSessionEnabled: cfg.DerivedSessionEnabled,
+		DerivedSessionWindow:  cfg.DerivedSessionWindow,
+	})
+	if err != nil {
+		trackerWarnf("storage disabled (open %s: %v)", cfg.DBPath, err)
+		storeMu.Lock()
+		appliedStoreKey = ""
+		if usageStore != nil {
+			_ = usageStore.Close()
+		}
+		usageStore = nil
+		storeMu.Unlock()
+		return
+	}
+	storeMu.Lock()
+	old := usageStore
+	usageStore = next
+	appliedStoreKey = key
+	if old != nil && old != next {
+		_ = old.Close()
+	}
+	storeMu.Unlock()
+}
+
+func usageStatsOpen() bool {
+	if ensureStoreOpen() {
+		return true
+	}
+	storeMu.RLock()
+	defer storeMu.RUnlock()
+	return usageStore != nil
+}
+
+// ensureStoreOpen attempts to recover a closed/uninitialized bbolt store.
+// If the store is already open, it returns true immediately.
+// If storage was disabled due to a transient hot-reload handover collision,
+// this periodic check automatically heals the store once the lock clears.
+func ensureStoreOpen() bool {
+	storeMu.RLock()
+	open := usageStore != nil
+	storeMu.RUnlock()
+	if open {
+		return true
+	}
+	trackerCfgMu.RLock()
+	cfg := trackerCfg
+	trackerCfgMu.RUnlock()
+	if !cfg.FeedEnabled {
+		return false
+	}
+	reopenStore(cfg)
+	storeMu.RLock()
+	defer storeMu.RUnlock()
+	return usageStore != nil
+}
+
+// handleUsage is the UsagePlugin entry point (pluginabi.MethodUsageHandle).
+// The host broadcasts one canonical pluginapi.UsageRecord after every request
+// served by non-plugin executors — i.e. third-party api providers. Those
+// records are recorded into the local store so the dashboard shows them next
+// to the workbuddy records that arrive via the shared feed.
+//
+// workbuddy plugin-executor requests do NOT arrive here: the host UsagePlugin
+// broadcast never fires for plugin executors (that is why workbuddy appends
+// the shared NDJSON feed instead), so no cross-path dedup is needed.
+//
+// Important: we must NEVER return (nil, err) here. The host's RPC adapter
+// wraps any error reply in a panic recover that calls fusePlugin(id, ...) and
+// permanently disables this plugin's UsagePlugin — every subsequent
+// api-provider record would then be silently dropped. The store may be
+// transiently closed during a reopenStore swap; the right response is to
+// ack with recorded=false and let the host keep broadcasting.
+func handleUsage(raw []byte) ([]byte, error) {
+	trackerInfof("usage.handle: received %d bytes", len(raw))
+
+	ensureStoreOpen()
+	storeMu.RLock()
+	store := usageStore
+	storeMu.RUnlock()
+	if store == nil {
+		trackerWarnf("usage.handle: store not initialized, dropping record")
+		return okEnvelope(map[string]any{"recorded": false, "reason": "store not initialized"})
+	}
+	// Lightweight peek for the diagnostic log; the store performs the full
+	// canonical decode internally.
+	var peek struct {
+		Provider string `json:"Provider"`
+		Model    string `json:"Model"`
+		Alias    string `json:"Alias"`
+		Source   string `json:"Source"`
+		Failed   bool   `json:"Failed"`
+	}
+	_ = json.Unmarshal(raw, &peek)
+	if err := store.RecordUsageRecord(raw); err != nil {
+		trackerWarnf("usage.handle: record failed (non-fatal): provider=%s model=%s err=%v", peek.Provider, peek.Model, err)
+		return okEnvelope(map[string]any{"recorded": false, "reason": err.Error()})
+	}
+	trackerInfof("usage.handle: recorded provider=%s model=%s alias=%s source=%s failed=%v", peek.Provider, peek.Model, peek.Alias, peek.Source, peek.Failed)
+	return okEnvelope(map[string]any{"recorded": true})
+}
+
+// usageStatsQuery dispatches a statistics query against the store.
+func usageStatsQuery(method, rel string, query url.Values, body []byte, headers http.Header) usagestats.QueryResult {
+	ensureStoreOpen()
+	storeMu.RLock()
+	store := usageStore
+	storeMu.RUnlock()
+	if store == nil {
+		return usagestats.QueryResult{
+			Status:  http.StatusServiceUnavailable,
+			Headers: jsonResultHeaders(),
+			Body:    []byte(`{"error":"usage statistics is disabled or storage is not initialized"}`),
+		}
+	}
+	return store.HandleQuery(method, rel, query, body, headers)
+}
+
+func jsonResultHeaders() http.Header {
+	h := http.Header{}
+	h.Set("Content-Type", "application/json; charset=utf-8")
+	h.Set("Cache-Control", "no-store")
+	return h
+}
+
+// -----------------------------------------------------------------------------
+// Feed importer
+// -----------------------------------------------------------------------------
+
+// feedImporterOrphanPolls 是判定"本实例已被宿主退役"所需的连续关闭轮询数。热重载换
+// 句柄时，活跃实例最多经历一次因在途切换导致的关闭轮询，下一轮就会拿到新句柄；因此
+// 连续多轮关闭只可能是退役实例——它的 usageStore 永远不会再被换成新句柄。
+// 最近修改时间：2026-10-12；改动原因：退役实例的导入协程必须自行退出，否则持续 tail
+// 共享 feed、把自身内存偏移写进跨实例共享的 .offset 文件并刷日志。
+const feedImporterOrphanPolls = 3
+
+// currentStoreClosed 报告当前实例持有的 store 句柄是否已关闭。
+// 最近修改时间：2026-10-12；改动原因：为退役判定提供句柄健康信号。
+func currentStoreClosed() bool {
+	storeMu.RLock()
+	store := usageStore
+	storeMu.RUnlock()
+	return store != nil && store.Closed()
+}
+
+// importerOrphanCount 计算新一轮的连续关闭轮询数，并给出是否应当退出。只有**连续**关闭
+// 才计入退役判定：宿主完成换句柄后活跃实例会重新拿到健康句柄，计数必须归零。
+// 最近修改时间：2026-10-12；改动原因：把退役判定抽成纯函数，使重置语义可被表驱动用例覆盖。
+func importerOrphanCount(closed bool, previous int) (int, bool) {
+	if !closed {
+		return 0, false
+	}
+	next := previous + 1
+	return next, next >= feedImporterOrphanPolls
+}
+
+func feedImporterLoop() {
+	trackerCfgMu.RLock()
+	interval := trackerCfg.PollInterval
+	trackerCfgMu.RUnlock()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	orphanPolls := 0
+	for range ticker.C {
+		ensureStoreOpen()
+		var stop bool
+		orphanPolls, stop = importerOrphanCount(currentStoreClosed(), orphanPolls)
+		if stop {
+			trackerWarnf("feed: importer stopping after %d closed-store polls (instance retired)", orphanPolls)
+			return
+		}
+		syncUsageFeed()
+	}
+}
+
+// feedSyncTriggerCh is a capacity-1 semaphore that coalesces async feed-sync
+// requests from the dashboard read path. When the page fires 6+ concurrent
+// requests, the first drops a token and the rest coalesce; a single
+// background loop performs the sync OUTSIDE the request critical path. This
+// is the fix for the "entering the dashboard aborts session requests"
+// symptom: a synchronous syncUsageFeed() on every read made each request
+// queue behind the global feedSyncMu while a large backlog was being
+// ingested line-by-line.
+var (
+	feedSyncTriggerOnce sync.Once
+	feedSyncTriggerCh   chan struct{}
+)
+
+// triggerFeedSync requests a feed sync without blocking the caller. The sync
+// runs on a background loop; concurrent triggers are merged into at most one
+// pending pass. The poll ticker remains the authoritative importer, so a
+// coalesced trigger may safely be skipped entirely.
+func triggerFeedSync() {
+	feedSyncTriggerOnce.Do(func() {
+		feedSyncTriggerCh = make(chan struct{}, 1)
+		go feedSyncTriggerLoop()
+	})
+	select {
+	case feedSyncTriggerCh <- struct{}{}:
+	default: // a sync is already pending or running; coalesce
+	}
+}
+
+func feedSyncTriggerLoop() {
+	for range feedSyncTriggerCh {
+		syncUsageFeed()
+	}
+}
+
+// syncUsageFeed performs one tail pass over the shared feed: read everything
+// after the persisted offset, import complete NDJSON lines, advance the
+// offset. Serialized so the poll ticker and management queries never race.
+func syncUsageFeed() {
+	feedSyncMu.Lock()
+	defer feedSyncMu.Unlock()
+
+	trackerCfgMu.RLock()
+	enabled := trackerCfg.FeedEnabled
+	feedPath := trackerCfg.FeedPath
+	trackerCfgMu.RUnlock()
+	if !enabled || feedPath == "" {
+		return
+	}
+	storeMu.RLock()
+	store := usageStore
+	storeMu.RUnlock()
+	if store == nil {
+		return
+	}
+
+	f, err := os.Open(feedPath)
+	if err != nil {
+		return // feed not created yet — workbuddy may not have run
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return
+	}
+	size := info.Size()
+	offset := loadFeedOffset(feedPath, size)
+	if offset >= size {
+		return
+	}
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return
+	}
+	chunk, err := io.ReadAll(f)
+	if err != nil {
+		return
+	}
+	processed := ingestFeedChunk(store, chunk)
+	newOffset := offset + processed
+	if newOffset > size {
+		newOffset = size
+	}
+	if newOffset > offset {
+		saveFeedOffset(feedPath, newOffset)
+	}
+}
+
+// loadFeedOffset returns the persisted read offset, resetting to 0 when the
+// feed was rotated (file smaller than the stored offset). The caller holds
+// feedSyncMu.
+func loadFeedOffset(feedPath string, size int64) int64 {
+	if feedOffsetLoaded && feedOffset <= size {
+		return feedOffset
+	}
+	feedOffset = 0
+	feedOffsetLoaded = true
+	if raw, err := os.ReadFile(feedPath + ".offset"); err == nil {
+		if n, err := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64); err == nil && n >= 0 && n <= size {
+			feedOffset = n
+		}
+	}
+	return feedOffset
+}
+
+func saveFeedOffset(feedPath string, offset int64) {
+	feedOffset = offset
+	feedOffsetLoaded = true
+	_ = os.WriteFile(feedPath+".offset", []byte(strconv.FormatInt(offset, 10)+"\n"), 0o644)
+}
+
+// ingestFeedChunk parses complete NDJSON lines from chunk and records them.
+// Returns the number of bytes consumed (all complete lines; a trailing
+// partial line is left for the next poll).
+func ingestFeedChunk(store *usagestats.Store, chunk []byte) int64 {
+	text := string(chunk)
+	lines := strings.Split(text, "\n")
+	consumed := int64(0)
+	for i, line := range lines {
+		isLast := i == len(lines)-1
+		// Phantom element after a trailing newline ("a\n" -> ["a", ""]) or a
+		// trailing partial line ("a\nb" -> the "b" has no terminator yet):
+		// both consume nothing and are left for the next poll.
+		if isLast && (line == "" || !strings.HasSuffix(text, "\n")) {
+			break
+		}
+		if len(line) == 0 {
+			consumed += 1
+			continue
+		}
+		lineBytes := int64(len(line)) + 1
+		if int64(len(line)) > maxUsageFeedLineBytes {
+			consumed += lineBytes
+			trackerWarnf("feed: skipping oversized line (%d bytes)", len(line))
+			continue
+		}
+		// 最近修改时间：2026-10-11；改动原因：store 关闭时该行并未落库，偏移必须停在
+		// 这一行之前，否则一次宿主配置热重载就会把这批在途记录永久跳过。
+		if err := store.RecordFeedNDJSON(line); err != nil {
+			if errors.Is(err, usagestats.ErrStoreClosed) {
+				break
+			}
+			consumed += lineBytes
+			trackerWarnf("feed: skipping unparsable line: %v", err)
+			continue
+		}
+		consumed += lineBytes
+	}
+	return consumed
+}
+
+func trackerInfof(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "[token-usage-tracker] "+format+"\n", args...)
+}
+
+func trackerWarnf(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "[token-usage-tracker] "+format+"\n", args...)
+}
