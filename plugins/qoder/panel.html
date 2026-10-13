@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Qoder 面板</title>
+<title>QoderWork 面板</title>
 <style>
 /* Theme tokens aligned with CPA management panel (key-policy / themes.scss):
    default :root = light (paper); data-theme=white | dark; embedded iframe syncs parent. */
@@ -192,15 +192,15 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
     </div>
   </div>
   <div class="bar">
-    <button class="sec" id="importBtn" onclick="openImportModal()">导入 QoderWork 凭证</button>
     <button id="loginBtn" onclick="openLoginModal()">授权登录</button>
     <span class="toggle" title="授权登录的目标渠道（默认 Intl）">
       <button type="button" class="lreg" data-login-region="cn" onclick="pickLoginRegion('cn',this)">CN</button>
       <button type="button" class="lreg on" data-login-region="intl" onclick="pickLoginRegion('intl',this)">Intl</button>
     </span>
+    <button class="sec" id="importBtn" onclick="openImportModal()">导入 QoderWork 凭证</button>
     <button id="refreshBtn" onclick="load(true,this)">刷新数据</button>
-    <button class="sec" onclick="checkinAll(this)">全部签到</button>
-    <button class="sec" onclick="modelCtlToggle(this)" title="按渠道勾选启用/禁用模型（写入 oauth-excluded-models 子键）">模型禁用</button>
+    <button class="sec" id="checkinAllBtn" onclick="checkinAll(this)">全部签到</button>
+    <button class="sec" id="modelDisableBtn" onclick="modelCtlToggle(this)" title="按渠道勾选启用/禁用模型（写入 oauth-excluded-models 子键）">模型禁用</button>
     
     <label class="toggle" title="全部账号 09:00 / 21:00 · campaigns 权益通道，CN 与 Intl 均生效"><input type="checkbox" id="autoToggle" onchange="toggleAuto(this.checked)"> 自动签到</label>
     <span class="toggle" id="svtime"></span>
