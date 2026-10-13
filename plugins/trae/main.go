@@ -338,6 +338,7 @@ func handleMethod(method string, request []byte) ([]byte, error) {
 	switch method {
 	case pluginabi.MethodPluginRegister, pluginabi.MethodPluginReconfigure:
 		configureVariant(request)
+		configureRetryRobustness(request)
 		return okEnvelope(buildRegistration())
 
 	case pluginabi.MethodModelStatic:
@@ -490,12 +491,14 @@ func buildRegistration() registrationPayload {
 			Logo:             pluginLogoURL,
 			ConfigFields: []pluginapi.ConfigField{
 				{Name: "checkin_auto", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Enable daily auto check-in at 09:00 local time (default true)."},
-				{Name: "login_variant", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{"cn", "solo", "intl"}, Description: "Variant for NEW logins: cn (Trae Code CN, default), solo (Trae SOLO CN) or intl (Trae Intl, marscode.com). Existing accounts keep the variant recorded at login/adoption time."},
+				{Name: "login_variant", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{"cn", "solo", "intl"}, Description: "Variant for NEW logins: intl (Trae Intl, default), cn (Trae Code CN) or solo (Trae SOLO CN). The auth popup offers the same cn/intl choice per login (request region wins, this config is the fallback). Existing accounts keep the variant recorded at login/adoption time."},
 				{Name: "app_version", Type: pluginapi.ConfigFieldTypeString, Description: "Client version the INTL login flow presents (default 3.5.66). The www.trae.ai authorization page rejects stale version strings — set the version the intl client currently reports when logins bounce with a version-mismatch page."},
 				{Name: "callback_bind", Type: pluginapi.ConfigFieldTypeString, Description: "Bind address for the OAuth callback listener (default 127.0.0.1). Set 0.0.0.0 when CPA runs in Docker or on a remote host so the port can be published."},
 				{Name: "callback_port", Type: pluginapi.ConfigFieldTypeString, Description: "Fixed port for the OAuth callback listener (default: random per login). Docker: set e.g. 41890 with callback_bind=0.0.0.0 and publish -p 127.0.0.1:41890:41890 so the redirect completes automatically. If the browser runs on another machine and cannot reach the host's 127.0.0.1, or paste the failed address-bar URL into the paste box on <panel>/v0/resource/plugins/trae/panel (it replays it to the plugin's oauth_submit endpoint)."},
 				{Name: "token_keepalive", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Enable daily access-token refresh at 03:00 to prevent session expiry (default true)."},
 				{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Description: "Optional model list. Each item can have id, name, alias, context, max_tokens, enabled."},
+				{Name: "retry_on_4xx", Type: pluginapi.ConfigFieldTypeInteger, Description: "Same-request account failover budget on account-level 4xx/429 via the internal pool (default 10, 0 disables rotation). Absent key keeps the current value."},
+				{Name: "scheduler_mode", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{schedulerModeOff, schedulerModeSession}, Description: "Multi-account selection: off (defer to built-in, default) or session (per-conversation sticky routing, same key stays on one account up to 1h)."},
 			},
 		},
 		Capabilities: registrationCapability{
@@ -2075,34 +2078,98 @@ func handleExecExecute(request []byte) ([]byte, error) {
 	upstream.LogChatHead("execute", req.Model, req.Payload)
 	// issue #18: req.Model（宿主解析出的模型 id，不含凭据前缀）优先于 body
 	// 里客户端写的名字——后者带前缀时上游会以流内 biz_code=4001 拒绝。
-	rc, status, body, err := upstreamClient.ChatStream(a, req.Payload, req.Model)
-	if err != nil {
-		return nil, fmt.Errorf("execute: chat stream: %w", err)
-	}
-	if rc == nil {
+	// T19: same-request account rotation via the internal pool. The first
+	// attempt serves the routed credential; on an account-level 4xx/429 the
+	// loop records the failure via Pool.Cooldown, evicts the credential's
+	// session bindings, and retries the identical request on the next pool
+	// credential (PickExcluding), up to retry_on_4xx times. Non-rotatable
+	// failures and pool exhaustion keep the historical single-shot
+	// accounting (applyCooldown) and error shape byte-identical.
+	budget := loadedRetryOn4xx()
+	cur := a
+	tried := map[string]bool{}
+	usedHostID := req.AuthID
+	failedUID, failedStatus, failedBody := "", 0, ""
+	var failedKind upstream.ErrKind
+	for attempt := 0; attempt <= budget; attempt++ {
+		if attempt > 0 {
+			// Rotated credential: keep it servable (refresh + quota
+			// gate, both fail-open). Unusable → park it, walk the pool
+			// further; a drained pool surfaces the last chat failure.
+			if r, rerr := upstreamClient.RefreshTokenIfNeeded(cur, defaultRefreshSkew); rerr != nil {
+				tried[cur.UID] = true
+				noteRotationFailure(cur.UID, 0, rerr.Error())
+				evictSessionBindingsForAuth(cur.UID)
+				if next := pickTraeNextAuthFn(tried); next != nil {
+					cur = next
+					continue
+				}
+				break
+			} else if r {
+				// Best-effort persist (pool credentials carry their own
+				// FilePath; host-indexed write-back is unavailable here).
+				_ = cur.SaveAtomic()
+			}
+			if quotaGate(accountPool, cur) == gateRefuse {
+				tried[cur.UID] = true
+				evictSessionBindingsForAuth(cur.UID)
+				if next := pickTraeNextAuthFn(tried); next != nil {
+					cur = next
+					continue
+				}
+				break
+			}
+		}
+		rc, status, body, err := upstreamClient.ChatStream(cur, req.Payload, req.Model)
+		if err != nil {
+			return nil, fmt.Errorf("execute: chat stream: %w", err)
+		}
+		if rc != nil {
+			defer rc.Close()
+			completion, err := upstream.Aggregate(rc)
+			if err != nil {
+				if se, ok := err.(*upstream.SOLOStreamError); ok {
+					applyCooldown(cur.UID, se.Kind())
+					// v0.12.83: 这里原来只把错误 `aggregate: %w` 一层包装就返回，状态被
+					// 洗成"无状态"，宿主看不见账号配额已经耗尽，会继续选这个号。
+					return nil, upstreamStatusError(soloFaultStatus(se),
+						fmt.Errorf("aggregate: %w", soloStreamErrorCopy(se)))
+				}
+				return nil, fmt.Errorf("aggregate: %w", err)
+			}
+			accountPool.NoteSuccess(cur.UID)
+			out, _ := json.Marshal(completion)
+			return okEnvelope(pluginapi.ExecutorResponse{Payload: out})
+		}
 		// Non-2xx: classify and cool the account.
 		kind := upstream.Classify(status, string(body))
-		applyCooldown(a.UID, kind)
-		// 0.12.52: account-level statuses ride the error envelope so the
-		// host cooldown layer also stops re-picking a drained credential.
-		return nil, upstreamStatusError(status, chatHTTPErrorFor(status, kind, string(body)))
-	}
-	defer rc.Close()
-
-	completion, err := upstream.Aggregate(rc)
-	if err != nil {
-		if se, ok := err.(*upstream.SOLOStreamError); ok {
-			applyCooldown(a.UID, se.Kind())
-			// v0.12.83: 这里原来只把错误 `aggregate: %w` 一层包装就返回，状态被
-			// 洗成"无状态"，宿主看不见账号配额已经耗尽，会继续选这个号。
-			return nil, upstreamStatusError(soloFaultStatus(se),
-				fmt.Errorf("aggregate: %w", soloStreamErrorCopy(se)))
+		failedUID, failedStatus, failedBody, failedKind = cur.UID, status, string(body), kind
+		if !shouldRotateOnUpstreamErr(status, string(body)) || attempt >= budget {
+			applyCooldown(cur.UID, kind)
+			// 0.12.52: account-level statuses ride the error envelope so the
+			// host cooldown layer also stops re-picking a drained credential.
+			return nil, upstreamStatusError(status, chatHTTPErrorFor(status, kind, string(body)))
 		}
-		return nil, fmt.Errorf("aggregate: %w", err)
+		tried[cur.UID] = true
+		noteRotationFailure(cur.UID, status, string(body))
+		evictSessionBindingsForAuth(usedHostID)
+		evictSessionBindingsForAuth(cur.UID)
+		next := pickTraeNextAuthFn(tried)
+		if next == nil {
+			applyCooldown(cur.UID, kind)
+			return nil, upstreamStatusError(status, chatHTTPErrorFor(status, kind, string(body)))
+		}
+		cur = next
+		usedHostID = ""
 	}
-	accountPool.NoteSuccess(a.UID)
-	out, _ := json.Marshal(completion)
-	return okEnvelope(pluginapi.ExecutorResponse{Payload: out})
+	// Pool drained mid-rotation (rotated credential unservable and no
+	// further alternative): account the last chat failure historically and
+	// surface it — clean failure, never a hang.
+	if failedUID != "" {
+		applyCooldown(failedUID, failedKind)
+		return nil, upstreamStatusError(failedStatus, chatHTTPErrorFor(failedStatus, failedKind, failedBody))
+	}
+	return nil, fmt.Errorf("execute: account pool exhausted after %d attempt(s)", budget+1)
 }
 
 // executorStreamRequest wraps the host's executor.execute_stream RPC payload:

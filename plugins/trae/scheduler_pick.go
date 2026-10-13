@@ -20,6 +20,7 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
@@ -29,7 +30,35 @@ func handleSchedulerPick(raw []byte) ([]byte, error) {
 	if err := json.Unmarshal(raw, &req); err != nil {
 		return nil, err
 	}
-	// Routing stays host-side by design; see the package comment. Handled:
+	// T19: session mode is strictly opt-in. Every other mode (including the
+	// default off) keeps the historical no-routing philosophy — Handled:
 	// false tells the host to run its built-in scheduler for this pick.
-	return okEnvelope(pluginapi.SchedulerPickResponse{Handled: false})
+	// Only the retry path (executor rotation) and session mode intervene.
+	if loadedSchedulerMode() != schedulerModeSession {
+		return okEnvelope(pluginapi.SchedulerPickResponse{Handled: false})
+	}
+	// scheduler_mode=session: per-conversation sticky routing over trae
+	// candidates. Non-trae candidates stay host-routed; an empty/unusable
+	// set defers (Handled: false) so cross-provider failover still works.
+	var cands []traeSessionCandidate
+	for _, c := range req.Candidates {
+		if c.Provider != providerName {
+			continue
+		}
+		if strings.TrimSpace(c.ID) == "" {
+			continue
+		}
+		uid := sessionCandidateUID(c)
+		cands = append(cands, traeSessionCandidate{
+			ID:        strings.TrimSpace(c.ID),
+			UID:       uid,
+			Disabled:  sessionCandidateDisabled(c),
+			Exhausted: sessionPoolUnusable(uid),
+		})
+	}
+	picked := pickSessionAuth(extractSessionKey(req), cands)
+	if picked == "" {
+		return okEnvelope(pluginapi.SchedulerPickResponse{Handled: false})
+	}
+	return okEnvelope(pluginapi.SchedulerPickResponse{AuthID: picked, Handled: true})
 }
