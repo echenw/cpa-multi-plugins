@@ -39,7 +39,7 @@ import (
 var modelGroupRegionOrder = []string{"cn", "intl"}
 
 // modelGroupRegionLabel renders the human-facing region title. Keep in sync
-// with the login_region enum description in main.go and the panel badges.
+// with the panel badges.
 func modelGroupRegionLabel(region string) string {
 	switch region {
 	case "cn":

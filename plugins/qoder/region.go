@@ -4,7 +4,8 @@
 // were separate plugins whose logic differed only in host / client-id
 // constants. Merged in v0.10.0 into this single plugin: each auth file
 // carries its region explicitly (auth.region), with the stored domain as a
-// legacy fallback. New logins target the region configured via login_region.
+// legacy fallback. New logins target the request-carried region
+// (auth.login_start region keys, default intl).
 package main
 
 import (
@@ -21,12 +22,6 @@ const (
 )
 
 var (
-	loginRegionMu sync.RWMutex
-	// T24: NEW logins default to intl; the login_region config stays as the
-	// sticky fallback (explicit key still wins, bare reconfigures keep the
-	// current value — see configure in usage_config.go).
-	loginRegion   = regionIntl // region for NEW logins (config login_region)
-
 	// v0.8.45 (deprecated): login_dialect was a v0.8.40 Intl-only opt-in
 	// that selected between "cockpit" (legacy no-client_id/machine_id entry)
 	// and "desktop" (official desktop-client flow). Both CN and Intl now
@@ -130,13 +125,6 @@ func endpointModelsFor(sa *storedAuth) string {
 	return gatewayBaseFor(sa) + "/algo/api/v2/model/list?Encode=1"
 }
 
-// Login-region config accessors (parsed from login_region in configure()).
-func loadedLoginRegion() string {
-	loginRegionMu.RLock()
-	defer loginRegionMu.RUnlock()
-	return loginRegion
-}
-
 // v0.8.40 dialect accessors (parsed from login_dialect in configure()).
 const (
 	loginDialectCockpit = "cockpit"
@@ -156,12 +144,6 @@ func setLoginDialect(d string) {
 	loginDialectMu.Lock()
 	loginDialect = d
 	loginDialectMu.Unlock()
-}
-
-func setLoginRegion(r string) {
-	loginRegionMu.Lock()
-	loginRegion = r
-	loginRegionMu.Unlock()
 }
 
 // qoderWebsiteFor / qoderClientIDFor / qoderRedirectURIFor select the

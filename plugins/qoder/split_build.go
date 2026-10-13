@@ -17,9 +17,9 @@
 //
 //	  - providerName (var since the split flavor) → the registered plugin id,
 //	    auth-file namespace and panel entry.
-//	  - pluginVariantPin → the DEFAULT for the sticky login_region config;
-//	    an explicit login_region in config.yaml still wins (issue #24 sticky
-//	    semantics are untouched).
+//	  - pluginVariantPin → retained only so existing -ldflags -X injections
+//	    still link; it no longer affects login (login region comes only from
+//	    the request-carried field, default intl).
 //
 // Empty values (the unified flavor default) keep behavior byte-for-byte.
 package main
@@ -32,17 +32,14 @@ func init() {
 	applyVariantPin()
 }
 
-// applyVariantPin seeds the sticky login-region default from the build-time
-// pin. Called from init() (before any host configure()) and directly from
-// tests. Explicit login_region config still overrides later.
+// applyVariantPin is a no-op: config-file region switching is deleted, so a
+// build-time pin must not seed any stored login default. Kept (and still
+// called from init) so split-channel -ldflags builds keep linking while the
+// login path stays request-carried-only (default intl).
 func applyVariantPin() {
 	switch pluginVariantPin {
-	case "":
+	case "", regionCN, regionIntl:
 		return
-	case regionCN, regionIntl:
-		loginRegionMu.Lock()
-		loginRegion = pluginVariantPin
-		loginRegionMu.Unlock()
 	default:
 		panic("qoder: invalid pluginVariantPin " + pluginVariantPin)
 	}

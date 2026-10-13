@@ -110,63 +110,6 @@ func TestAdoptIsNoOpWhenNoLegacyFiles(t *testing.T) {
 	}
 }
 
-// Issue #24: login_region must be sticky across bare reconfigures and must
-// also be seen when the host sends the config as a flow-style mapping or
-// JSON — neither of which the line-scan can match.
-
-func TestQoderConfigureStickyLoginRegion(t *testing.T) {
-	old := loadedLoginRegion()
-	t.Cleanup(func() { setLoginRegion(old) })
-
-	wire := func(cfg string) []byte {
-		b, _ := json.Marshal(struct {
-			ConfigYAML []byte `json:"config_yaml"`
-		}{ConfigYAML: []byte(cfg)})
-		return b
-	}
-
-	configure(wire("enabled: true\nlogin_region: intl\npriority: 0\n"))
-	if got := loadedLoginRegion(); got != regionIntl {
-		t.Fatalf("block-style intl not applied: %q", got)
-	}
-
-	// Bare reconfigure (auth-store churn) must NOT reset to cn.
-	configure(wire("enabled: true\npriority: 0\n"))
-	if got := loadedLoginRegion(); got != regionIntl {
-		t.Fatalf("bare reconfigure reset login_region: %q", got)
-	}
-
-	// Explicit switch back still works.
-	configure(wire("enabled: true\nlogin_region: cn\n"))
-	if got := loadedLoginRegion(); got != regionCN {
-		t.Fatalf("explicit cn not applied: %q", got)
-	}
-}
-
-func TestQoderConfigureFlowStyleAndJSON(t *testing.T) {
-	old := loadedLoginRegion()
-	t.Cleanup(func() { setLoginRegion(old) })
-
-	wire := func(cfg string) []byte {
-		b, _ := json.Marshal(struct {
-			ConfigYAML []byte `json:"config_yaml"`
-		}{ConfigYAML: []byte(cfg)})
-		return b
-	}
-
-	// Flow-style mapping: the line-scan sees one line, the YAML decode must.
-	configure(wire("{enabled: true, login_region: intl, priority: 0}\n"))
-	if got := loadedLoginRegion(); got != regionIntl {
-		t.Fatalf("flow-style intl not applied: %q", got)
-	}
-
-	// JSON payload (YAML subset).
-	configure(wire(`{"enabled":true,"login_region":"intl"}`))
-	if got := loadedLoginRegion(); got != regionIntl {
-		t.Fatalf("JSON intl not applied: %q", got)
-	}
-}
-
 // Issue #25: the save funnel must carry host-owned operator fields
 // (proxy_url/weight/priority/prefix/label/...) across typed rebuilds.
 

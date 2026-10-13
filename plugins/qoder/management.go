@@ -130,7 +130,7 @@ func managementRegistration() managementRegistrationResponse {
 			{Method: http.MethodGet, Path: base + "/cooldowns", Description: "List active per-(account, model) cooldown entries."},
 			{Method: http.MethodPost, Path: base + "/cooldowns/clear", Description: "Clear cooldown for one account (auth_id) or one pair (auth_id + model)."},
 			{Method: http.MethodGet, Path: base + "/models/groups", Description: "Per-region model catalog (model_cache snapshots; ?refresh=1 re-discovers) for the panel's exclusion picker."},
-			{Method: http.MethodGet, Path: base + "/login/region", Description: "Auth-popup region selector: cn/intl options (default intl) plus the current sticky selection. Read-only, never writes config files."},
+			{Method: http.MethodPost, Path: base + "/login/start", Description: "Start a device-authorization login for the panel authorize button (body: {region: cn|intl, default intl}). Returns {auth_url, region}; open the URL, then the new account appears in the accounts view."},
 		},
 		Resources: []resourceRoute{
 			{Path: "/panel", Menu: "Qoder", Description: "Qoder dashboard (CN + Intl): credits, check-in, plan, import."},
@@ -199,8 +199,9 @@ func handleManagement(raw []byte) ([]byte, error) {
 	case req.Method == http.MethodGet && path == base+"/models/groups":
 		status, payload := handleModelGroupsQuery(req)
 		return okEnvelope(mgmtJSONResponse(status, payload))
-	case req.Method == http.MethodGet && path == base+"/login/region":
-		return okEnvelope(mgmtJSONResponse(http.StatusOK, loginRegionSelectorPayload()))
+	case req.Method == http.MethodPost && path == base+"/login/start":
+		status, payload := handlePanelLoginStart(req)
+		return okEnvelope(mgmtJSONResponse(status, payload))
 	}
 	return okEnvelope(mgmtJSONResponse(http.StatusNotFound, map[string]any{"error": "not found: " + path}))
 }

@@ -96,21 +96,12 @@ const defaultUsageReportURL = "http://127.0.0.1:18317/v0/management/usage/import
 const fallbackUsageReportURL = "http://cpa-manager-plus:18317/v0/management/usage/import"
 
 // configure decodes plugin config from the lifecycle request.
-// v0.8.29 (issue #24): login_region is STICKY — it only changes when the
-// incoming config explicitly carries the key (same semantics trae shipped in
-// v0.12.3). The host may resend Register/Reconfigure with a bare or foreign
-// config block (e.g. during auth-store churn); resetting to cn on those made
-// intl logins flip regions mid-flight. Values are read from a real YAML
-// decode first (yaml.v3 rides in via the SDK), so flow-style one-liners
-// (`trae: {enabled: true, login_region: intl}`) and JSON payloads parse too;
-// the historical line-scan stays as the fallback for malformed YAML.
 func configure(raw []byte) {
 	// Parse config without holding any lock (fixes nested-lock hazard).
 	nextCheckinAuto := true
 	nextLifecycleAuto := true
 	nextSchedulerMode := schedulerModeOff // reset to default on reconfigure
 	nextKeepaliveAuto := true
-	nextLoginRegion := ""  // sticky: empty = keep current (issue #24)
 	nextLoginDialect := "" // sticky: empty = keep current (v0.8.40)
 	nextMgmtKey := ""
 	nextStreamHeadTimeout := 0
@@ -138,9 +129,6 @@ func configure(raw []byte) {
 			// authoritative for block style (both agree there); the
 			// map only ADDS keys the scan cannot see.
 			if m, ok := decodePluginConfigYAML(req.ConfigYAML); ok {
-				if v, present := m["login_region"]; present {
-					nextLoginRegion = normalizeRegion(configScalarString(v))
-				}
 				if v, present := m["login_dialect"]; present {
 					if d := strings.ToLower(configScalarString(v)); d == loginDialectCockpit || d == loginDialectDesktop {
 						nextLoginDialect = d
@@ -237,11 +225,6 @@ func configure(raw []byte) {
 					v = strings.Trim(v, "\"'")
 					nextKeepaliveAuto = v == "true" || v == "1" || v == "yes" || v == "on"
 				}
-				if strings.HasPrefix(line, "login_region:") {
-					v := strings.TrimSpace(strings.TrimPrefix(line, "login_region:"))
-					v = strings.Trim(v, "\"'")
-					nextLoginRegion = normalizeRegion(v)
-				}
 				if strings.HasPrefix(line, "login_dialect:") {
 					v := strings.TrimSpace(strings.TrimPrefix(line, "login_dialect:"))
 					v = strings.Trim(v, "\"'")
@@ -290,17 +273,6 @@ func configure(raw []byte) {
 	keepaliveAutoMu.Lock()
 	keepaliveAuto = nextKeepaliveAuto
 	keepaliveAutoMu.Unlock()
-
-	// Sticky (issue #24): only an explicit login_region key moves the
-	// pointer; bare/foreign reconfigures keep whatever was configured.
-	if nextLoginRegion != "" {
-		loginRegionMu.Lock()
-		if loginRegion != nextLoginRegion {
-			log.Printf("qoder: login_region=%s applied (new logins target %s)", nextLoginRegion, strings.ToUpper(nextLoginRegion))
-		}
-		loginRegion = nextLoginRegion
-		loginRegionMu.Unlock()
-	}
 
 	// Sticky (v0.8.40): only an explicit login_dialect key moves the pointer.
 	if nextLoginDialect != "" {

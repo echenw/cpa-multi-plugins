@@ -1,19 +1,16 @@
-// region_switch.go — T24: request-carried login region + panel selector.
+// region_switch.go — request-carried login region.
 //
-// The authorization popup selects its realm per login attempt (default intl,
-// switchable to cn) instead of only via the config-file login_region:
+// Region selection lives in exactly two places, both defaulting to intl:
 //   - auth.login_start requests may carry one of the keys region /
 //     login_region / variant (top-level JSON string). When present it wins;
-//     when absent the sticky login_region config stays the fallback.
-//     An empty fallback resolves to intl.
-//   - Only cn/intl are accepted from the request. Any other non-empty value
-//     is an explicit error and the stored selection is left untouched (no
-//     config files are written by this path, ever).
-//   - The selector (options + default + current) is surfaced in the
-//     login-start response Metadata and at GET <base>/login/region.
-//   - Per-account routing (authRegion / upstreamBaseFor / gatewayBaseFor)
-//     is untouched: existing accounts keep the region recorded at
-//     login/adoption time.
+//     when absent the login defaults to intl.
+//   - the management panel POST <base>/login/start takes the same keys and
+//     hands the auth URL to the operator (default intl).
+// Only cn/intl are accepted. Any other non-empty value is an explicit
+// error (no config files are written by this path, ever).
+// Per-account routing (authRegion / upstreamBaseFor / gatewayBaseFor)
+// is untouched: existing accounts keep the region recorded at
+// login/adoption time.
 package main
 
 import (
@@ -22,11 +19,7 @@ import (
 	"strings"
 )
 
-// loginRegionOptions is the exact selector surface: cn/intl only, default intl.
-var loginRegionOptions = []string{regionCN, regionIntl}
-
-// defaultRequestLoginRegion is the login realm when neither the request nor
-// the sticky config names one.
+// defaultRequestLoginRegion is the login realm when the request names none.
 const defaultRequestLoginRegion = regionIntl
 
 // parseLoginRegionField scans a raw auth.login_start request for a
@@ -63,10 +56,9 @@ func parseLoginRegionField(raw []byte) (string, bool, error) {
 	return "", false, nil
 }
 
-// resolveRequestLoginRegion prefers the request-carried region (T24) and
-// falls back to the sticky login_region config (which stays as the fallback
-// default only, sticky semantics in usage_config.go untouched). An empty
-// fallback resolves to intl.
+// resolveRequestLoginRegion prefers the request-carried region and falls
+// back to the intl default. The fallback parameter is the intl default
+// constant (no stored config value is read anywhere).
 func resolveRequestLoginRegion(raw []byte, fallback string) (string, error) {
 	if v, present, err := parseLoginRegionField(raw); present {
 		if err != nil {
@@ -78,33 +70,4 @@ func resolveRequestLoginRegion(raw []byte, fallback string) (string, error) {
 		return defaultRequestLoginRegion, nil
 	}
 	return normalizeRegion(fallback), nil
-}
-
-// loginRegionSelector is the panel/login-start selector payload.
-type loginRegionSelector struct {
-	Options []string `json:"options"`
-	Default string   `json:"default"`
-	Current string   `json:"current"`
-}
-
-// loginRegionSelectorPayload reports the cn/intl options (default intl) plus
-// the current sticky selection. Read-only: it never writes config files.
-func loginRegionSelectorPayload() loginRegionSelector {
-	return loginRegionSelector{
-		Options: append([]string(nil), loginRegionOptions...),
-		Default: defaultRequestLoginRegion,
-		Current: normalizeRegion(loadedLoginRegion()),
-	}
-}
-
-// withLoginRegionMetadata stamps the selector onto a login-start response
-// Metadata map (login-start surface, no config writes).
-func withLoginRegionMetadata(md map[string]any, current string) map[string]any {
-	if md == nil {
-		md = map[string]any{}
-	}
-	md["region"] = current
-	md["region_options"] = append([]string(nil), loginRegionOptions...)
-	md["region_default"] = defaultRequestLoginRegion
-	return md
 }

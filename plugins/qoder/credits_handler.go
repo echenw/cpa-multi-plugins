@@ -28,12 +28,12 @@ func handleImportPAT(req pluginapi.ManagementRequest) map[string]any {
 	if !strings.HasPrefix(pat, "pt-") {
 		return map[string]any{"success": false, "error": "PAT must start with pt-"}
 	}
-	tok, err := exchangePATForJobToken(pat, loadedLoginRegion())
+	tok, err := exchangePATForJobToken(pat, regionIntl)
 	if err != nil {
 		return map[string]any{"success": false, "error": "jobToken exchange: " + err.Error()}
 	}
-	ui, _ := fetchUserInfo(tok.Token, loadedLoginRegion()) // best-effort
-	sa := buildStoredAuthFromJobToken(pat, tok, ui, loadedLoginRegion())
+	ui, _ := fetchUserInfo(tok.Token, regionIntl) // best-effort
+	sa := buildStoredAuthFromJobToken(pat, tok, ui, regionIntl)
 
 	fileJSON, err := buildAuthFileJSON(sa, false, displayNote(sa, nil, false), nil)
 	if err != nil {

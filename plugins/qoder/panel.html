@@ -66,6 +66,8 @@ button.sec{background:var(--btn-sec);color:var(--fg)}button.sec:hover{background
 .ftag{background:var(--surface);border:1px solid var(--border);color:var(--mut);border-radius:99px;padding:5px 14px;font-size:12px;cursor:pointer;font-weight:600}
 .ftag.active{background:var(--acc);color:var(--on-acc);border-color:var(--acc)}
 .ftag .cnt{font-size:10px;opacity:.75;margin-left:4px}
+.lreg{background:var(--surface);border:1px solid var(--border);color:var(--mut);border-radius:99px;padding:5px 14px;font-size:12px;cursor:pointer;font-weight:600}
+.lreg.on{background:var(--acc);color:var(--on-acc);border-color:var(--acc)}
 /* 用量汇总与账号卡共用 --card，避免夜间两套底色 */
 .summary{padding:16px;margin-bottom:14px}
 .summary-hd{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
@@ -191,6 +193,11 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
   </div>
   <div class="bar">
     <button class="sec" id="importBtn" onclick="openImportModal()">导入 QoderWork 凭证</button>
+    <button id="loginBtn" onclick="startLogin(this)">授权登录</button>
+    <span class="toggle" title="授权登录的目标渠道（默认 Intl）">
+      <button type="button" class="lreg" data-login-region="cn" onclick="pickLoginRegion('cn',this)">CN</button>
+      <button type="button" class="lreg on" data-login-region="intl" onclick="pickLoginRegion('intl',this)">Intl</button>
+    </span>
     <button id="refreshBtn" onclick="load(true,this)">刷新数据</button>
     <button class="sec" onclick="checkinAll(this)">全部签到</button>
     <button class="sec" onclick="modelCtlToggle(this)" title="按渠道勾选启用/禁用模型（写入 oauth-excluded-models 子键）">模型禁用</button>
@@ -924,6 +931,42 @@ async function importAuth(btn){
     }else toast("导入失败","err",d.error||"unknown");
   }catch(e){toast("导入请求失败","err",e.message)}
   busy(btn,false);
+}
+/* ===== 授权登录 =====
+   POST /plugins/qoder/login/start {region} → {auth_url, region}；
+   新标签页打开授权链接，轮询 /accounts 等待新账号出现（与插件
+   poll 的 panel-import 检测同一信号：新鉴权文件落盘），然后 load(true)。 */
+let loginRegion="intl";
+function pickLoginRegion(r,btn){
+  loginRegion=r;
+  document.querySelectorAll("[data-login-region]").forEach(b=>b.classList.toggle("on",b===btn));
+  if(btn)btn.blur();
+}
+async function startLogin(btn){
+  busy(btn,true);
+  try{
+    let seen=new Set(),haveSnapshot=false;
+    try{
+      const b=await api("/accounts");
+      (b.accounts||[]).forEach(a=>seen.add(a.auth_index||a.name||a.uid));
+      haveSnapshot=true;
+    }catch(_){}
+    const d=await api("/login/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({region:loginRegion})});
+    if(!d||!d.auth_url){toast("授权登录启动失败","err",(d&&d.error)||"unknown");return}
+    toast("已打开授权页","ok","请在新标签页完成 "+(d.region||loginRegion)+" 登录；本页将自动检测新账号");
+    window.open(d.auth_url,"_blank","noopener");
+    if(!haveSnapshot){load(true);return}
+    const t0=Date.now();
+    while(Date.now()-t0<10*60*1000){
+      await new Promise(r=>setTimeout(r,5000));
+      try{
+        const cur=await api("/accounts");
+        if(((cur&&cur.accounts)||[]).some(a=>!seen.has(a.auth_index||a.name||a.uid))){toast("检测到新账号","ok","授权完成");load(true);return}
+      }catch(_){}
+    }
+    toast("等待超时","warn","若已完成授权请手动点刷新数据");
+  }catch(e){toast("授权登录失败","err",e.message||String(e))}
+  finally{busy(btn,false)}
 }
 /* ===== 模型禁用（v0.8.27）=====
    目录：GET /plugins/qoder/models/groups（插件按 region 聚合 model_cache

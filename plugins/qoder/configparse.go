@@ -4,7 +4,7 @@
 // usage_config.go stays as a fallback for payloads yaml.v3 refuses; both
 // views agree on block style, so the map only ever ADDS visibility.
 //
-// History (issue #24): three plugins read login_variant/login_region by
+// History (issue #24): three plugins read login variant keys by
 // scanning YAML lines, which silently misses flow-style mappings — and the
 // exact serialization style depends on how config.yaml was written. Parsing
 // the document removes that ambiguity.

@@ -87,3 +87,15 @@ Each entry names the plan task that introduced it.
   identity header; in-stream 200 error frames rotate only on
   hard-credit/soft-rate-limit markers (T17 rule, not R1's broader
   `isAccountFailure`).
+
+## Post-v0.1 — login region moved to the management panel (qoder/trae/workbuddy)
+
+- Config-file region switching is deleted (no `login_region:`/`login_variant:`
+  parsing, no sticky state, no `login/region` GET route, no
+  `region_options` metadata stamping — the host frontend ignores that
+  metadata, verified against CLIProxyAPI source 2026-10-14).
+- Each plugin panel now has an `授权登录` button with a CN/Intl toggle
+  defaulting to Intl, backed by new `POST <base>/login/start`
+  (`{region}`, absent → intl, invalid → 400, nothing persisted).
+  Login attempts without a carried region (incl. the host OAuth popup)
+  resolve to Intl. Existing accounts keep the region recorded at login time.

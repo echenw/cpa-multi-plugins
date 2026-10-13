@@ -298,9 +298,9 @@ func makePKCE() (string, string) {
 // handleStartLogin implements AuthProvider.StartLogin: build the device
 // authorization URL and stash the PKCE verifier under the returned state.
 func handleStartLogin(raw []byte) ([]byte, error) {
-	// T24: request-carried region wins (default intl); sticky login_region
-	// is the fallback only. Illegal values fail before any state is stored.
-	region, err := resolveRequestLoginRegion(raw, loadedLoginRegion())
+	// Request-carried region wins (default intl). Illegal values fail
+	// before any state is stored.
+	region, err := resolveRequestLoginRegion(raw, defaultRequestLoginRegion)
 	if err != nil {
 		return nil, err
 	}
@@ -308,9 +308,8 @@ func handleStartLogin(raw []byte) ([]byte, error) {
 }
 
 // startLoginWithRegion starts a device-flow login pinned to region. The host
-// RPC entry (handleStartLogin) prefers the request-carried region (T24,
-// default intl); the plugin config (login_region dropdown) is the fallback
-// and stays STICKY (v0.12.10).
+// RPC entry (handleStartLogin) takes the request-carried region (default
+// intl); there is no config-file fallback.
 //
 // v0.8.45 (official desktop client v0.4.3 asar forensics): both CN and Intl
 // now build the official desktop-client URL byte-for-byte (asar functions
@@ -329,8 +328,8 @@ func handleStartLogin(raw []byte) ([]byte, error) {
 // both "cockpit" and "desktop" values produce the same desktop URL. The
 // config key is kept for backward compatibility with existing deployments.
 func startLoginWithRegion(raw []byte, region string) ([]byte, error) {
-	// T24: only cn/intl route; anything else is an explicit rejection (the
-	// stored selection is untouched — this path never writes config).
+	// Only cn/intl route; anything else is an explicit rejection (this
+	// path never writes config).
 	if region != regionCN && region != regionIntl {
 		return nil, fmt.Errorf("invalid login region %q: want \"cn\" or \"intl\" (default \"intl\"); current selection unchanged", region)
 	}
@@ -382,11 +381,41 @@ func startLoginWithRegion(raw []byte, region string) ([]byte, error) {
 		URL:       authURL,
 		State:     state,
 		ExpiresAt: now.Add(loginTTL).UTC(),
-		Metadata: withLoginRegionMetadata(map[string]any{
+		Metadata: map[string]any{
 			"logo":   pluginLogoURL,
 			"prompt": prompt,
-		}, region),
+		},
 	})
+}
+
+// handlePanelLoginStart serves POST <base>/login/start (management panel
+// "授权登录" button): the JSON body carries the same region keys as
+// auth.login_start (absent → intl default; any other value → 400 and nothing
+// is stored). It runs one startLoginWithRegion and returns {auth_url,
+// region} for the panel to open in a new tab; completion is observed the
+// same way as the panel-import path (a new auth file appears, then the
+// panel reloads its accounts view).
+func handlePanelLoginStart(req pluginapi.ManagementRequest) (int, map[string]any) {
+	region, present, err := parseLoginRegionField(req.Body)
+	if err != nil {
+		return http.StatusBadRequest, map[string]any{"error": err.Error()}
+	}
+	if !present {
+		region = defaultRequestLoginRegion
+	}
+	out, err := startLoginWithRegion(nil, region)
+	if err != nil {
+		return http.StatusBadRequest, map[string]any{"error": err.Error()}
+	}
+	var env envelope
+	if err := json.Unmarshal(out, &env); err != nil || !env.OK {
+		return http.StatusInternalServerError, map[string]any{"error": "login start failed"}
+	}
+	var start pluginapi.AuthLoginStartResponse
+	if err := json.Unmarshal(env.Result, &start); err != nil || start.URL == "" {
+		return http.StatusInternalServerError, map[string]any{"error": "login start decode failed"}
+	}
+	return http.StatusOK, map[string]any{"auth_url": start.URL, "region": region}
 }
 
 // pollDeviceToken performs one GET against /api/v1/deviceToken/poll.
