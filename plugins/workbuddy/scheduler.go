@@ -19,6 +19,11 @@ import (
 const (
 	schedulerModeOff     = "off"
 	schedulerModeCredits = "credits"
+	// schedulerModeSession enables per-conversation routing: the same
+	// conversation sticks to one account for up to 1h (session_auth.go)
+	// while different conversations spread across accounts. Default stays
+	// off — session is strictly opt-in.
+	schedulerModeSession = "session"
 )
 
 var (
@@ -53,9 +58,13 @@ func loadedSchedulerMode() string {
 //   - "off"     → plugin does NOT handle routing; defer everything to built-in.
 //   - "credits" → plugin picks via panel-selected active account (sticky, with
 //     fallback when that account becomes exhausted/disabled).
+//   - "session" → per-conversation routing via pickSessionAuth: same
+//     conversation sticks to one account for up to 1h, different
+//     conversations spread across accounts; requests without a session
+//     identity fall back to the panel-selected account (same as credits).
 //
 // Default is off (see schedulerMode init). Users opting into the plugin's
-// routing should set scheduler_mode: credits in plugin config.
+// routing should set scheduler_mode: credits or session in plugin config.
 func handleSchedulerPick(raw []byte) ([]byte, error) {
 	var req pluginapi.SchedulerPickRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
@@ -64,7 +73,8 @@ func handleSchedulerPick(raw []byte) ([]byte, error) {
 
 	// v0.6.31: actually honor the scheduler_mode toggle. Previously the config
 	// was parsed but never read here, so "off" silently behaved like "credits".
-	if loadedSchedulerMode() != schedulerModeCredits {
+	mode := loadedSchedulerMode()
+	if mode != schedulerModeCredits && mode != schedulerModeSession {
 		return okEnvelope(pluginapi.SchedulerPickResponse{Handled: false})
 	}
 
@@ -102,7 +112,12 @@ func handleSchedulerPick(raw []byte) ([]byte, error) {
 			Exhausted: exhausted,
 		})
 	}
-	picked := pickActiveAuth(cands)
+	picked := ""
+	if mode == schedulerModeSession {
+		picked = pickSessionAuth(extractSessionKey(req), cands)
+	} else {
+		picked = pickActiveAuth(cands)
+	}
 	if picked == "" {
 		return okEnvelope(pluginapi.SchedulerPickResponse{Handled: false})
 	}

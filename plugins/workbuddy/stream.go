@@ -414,8 +414,61 @@ func pumpStreamFrames(scanner *bufio.Scanner, sink streamSink, gate *streamHeadG
 // collectUpstreamStream is the synchronous fallback (no async stream id): drain
 // the upstream, clean each chunk, return them as a slice. The collector, when
 // non-nil, observes raw upstream chunks for usage extraction. statusCode is the
-// upstream HTTP status (0 for transport-level failures).
-func collectUpstreamStream(body []byte, sa *storedAuth, sseFramed bool, collector *sseUsageCollector, upstreamModel string) ([]pluginapi.ExecutorStreamChunk, int, error) {
+// upstream HTTP status (0 for transport-level failures). authID is the
+// scheduler-level account id used for rotation bookkeeping (session evict +
+// next-account lookup); "" falls back to the token/UID carried by sa.
+//
+// Per-request account-failover loop (T17): on an account-level 4xx
+// (401/403/404/405) or 429 the same body is retried against the next
+// candidate, up to retry_on_4xx times. Business 400, 5xx/0/402 and
+// in-stream failures without account-level markers return immediately —
+// the caller owns all accounting, so intermediate rotated attempts stay
+// silent and only the final outcome is recorded.
+func collectUpstreamStream(body []byte, sa *storedAuth, sseFramed bool, collector *sseUsageCollector, upstreamModel, authID string) ([]pluginapi.ExecutorStreamChunk, int, error) {
+	budget := loadedRetryOn4xx()
+	curSA := sa
+	curAuthID := authID
+	var lastStatus int
+	var lastErr error
+	for attempt := 0; attempt <= budget; attempt++ {
+		chunks, statusCode, errOnce := collectUpstreamStreamOnce(body, curSA, sseFramed, collector, upstreamModel)
+		if errOnce == nil {
+			return chunks, statusCode, nil
+		}
+		lastStatus = statusCode
+		lastErr = errOnce
+		if !shouldRotateOnUpstreamErr(statusCode, errOnce.Error()) {
+			return chunks, statusCode, errOnce
+		}
+		if attempt >= budget {
+			return chunks, statusCode, errOnce
+		}
+		currentID := curAuthID
+		if currentID == "" && curSA != nil {
+			currentID = strings.TrimSpace(curSA.Auth.AccessToken)
+			if currentID == "" {
+				currentID = strings.TrimSpace(curSA.Account.UID)
+			}
+		}
+		if currentID == "" {
+			return chunks, statusCode, errOnce
+		}
+		evictSessionBindingsForAuth(currentID)
+		nextID, nextSA, hasNext := pickNextAuthFn(currentID, upstreamModel)
+		if !hasNext || nextSA == nil {
+			return chunks, statusCode, errOnce
+		}
+		curSA = nextSA
+		curAuthID = nextID
+	}
+	return nil, lastStatus, lastErr
+}
+
+// collectUpstreamStreamOnce performs exactly one synchronous upstream call
+// against sa: build the request, route via host.http.do_stream, decide
+// success vs 4xx/5xx. Pulled out of collectUpstreamStream so the retry loop
+// can run the same body against a different account on failure.
+func collectUpstreamStreamOnce(body []byte, sa *storedAuth, sseFramed bool, collector *sseUsageCollector, upstreamModel string) ([]pluginapi.ExecutorStreamChunk, int, error) {
 	httpReq, err := http.NewRequest(http.MethodPost, endpointChatFor(sa), bytes.NewReader(body))
 	if err != nil {
 		return nil, 0, err

@@ -370,7 +370,7 @@ func wbRegistration() registration {
 				{Name: "models_cn", Type: pluginapi.ConfigFieldTypeString, Description: "Leave empty (recommended): each CN account then supports exactly what copilot.tencent.com returns for its credential token (5-min cache). Optional comma-separated upstream model IDs to pin/override the CN model output."},
 				{Name: "models_global", Type: pluginapi.ConfigFieldTypeString, Description: "Leave empty (recommended): each Global account then supports exactly what workbuddy.ai returns for its credential token (5-min cache). Optional comma-separated upstream model IDs to pin/override the Global model output."},
 				{Name: "models_intl", Type: pluginapi.ConfigFieldTypeString, Description: "Leave empty (recommended): each Intl account then supports exactly what codebuddy.ai returns for its credential token (5-min cache) - no pre-filled guessing, so unsupported models are never advertised or routed. Optional comma-separated upstream model IDs to pin/override the Intl model output."},
-				{Name: "scheduler_mode", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{schedulerModeOff, schedulerModeCredits}, Description: "Multi-account selection: off (defer to built-in, default) or credits (pick highest remaining). WARNING: when off + lifecycle_auto=false, exhausted accounts may still be routed — enable lifecycle_auto or set scheduler_mode=credits."},
+				{Name: "scheduler_mode", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{schedulerModeOff, schedulerModeCredits, schedulerModeSession}, Description: "Multi-account selection: off (defer to built-in, default), credits (panel-selected account) or session (per-conversation sticky routing, same key stays on one account up to 1h). WARNING: when off + lifecycle_auto=false, exhausted accounts may still be routed — enable lifecycle_auto or set scheduler_mode=credits."},
 				{Name: "stream_head_timeout", Type: pluginapi.ConfigFieldTypeInteger, Description: "Opt-in async-stream head gate, in seconds (default 0 = disabled, unchanged behavior). When > 0 the executor waits up to this long for the first decisive upstream event before opening the host stream, so a pre-answer failure (upstream >=400 or an error frame before the model starts answering) returns as a normal failed request with an HTTP status instead of a lossy in-band text error. Never blocks longer than this, and a silent stream is released normally."},
 				{Name: "usage_report_url", Type: pluginapi.ConfigFieldTypeString, Description: "Optional override of CPAMP usage import URL (default http://cpa-manager-plus:18317/v0/management/usage/import; also env USAGE_REPORT_URL)."},
 				{Name: "usage_report_key", Type: pluginapi.ConfigFieldTypeString, Description: "Optional CPAMP admin key override. Prefer auto-detect from env CPAMP_ADMIN_KEY / USAGE_REPORT_KEY or secret file /run/secrets/cpamp_admin_key."},
@@ -574,6 +574,11 @@ func originRefererFor(sa *storedAuth) string {
 // Global JWT iss is workbuddy.ai — those tokens only work on www.workbuddy.ai.
 // CN tokens work on copilot.tencent.com. Mixing them yields APISIX 401.
 func upstreamBaseFor(sa *storedAuth) string {
+	// Test seam: hermetic tests point every account at an httptest server
+	// (see setChatUpstreamBase). Production never sets it.
+	if chatUpstreamBaseOverride != "" {
+		return chatUpstreamBaseOverride
+	}
 	if sa != nil {
 		if isGlobalDomain(sa.Auth.Domain) {
 			return upstreamBaseGlobal
@@ -795,6 +800,80 @@ func toAuthDataOptsWithNote(sa *storedAuth, cr *creditsSummary, disabled bool, p
 
 // -----------------------------------------------------------------------------
 
+// execFailure is one failed upstream attempt on the non-stream path. Exactly
+// one of transportErr / aggErr is set, or neither (plain >=400 with status +
+// body). The loop rotates only on account-level failures; the final failure
+// is accounted exactly like the historical single-shot path.
+type execFailure struct {
+	status       int
+	body         string
+	respHdr      http.Header
+	transportErr error
+	aggErr       error
+}
+
+// execExecuteAttempt performs exactly one synchronous upstream call against
+// sa and folds the SSE body into a chat.completion object. No accounting
+// happens here — the caller (handleExecExecute) owns publishUsage /
+// cooldown / reconcile so intermediate rotated attempts stay silent and the
+// final outcome is recorded once, against the account that produced it.
+func execExecuteAttempt(body []byte, sa *storedAuth, model string) ([]byte, *execFailure) {
+	httpReq, err := http.NewRequest(http.MethodPost, endpointChatFor(sa), bytes.NewReader(body))
+	if err != nil {
+		return nil, &execFailure{transportErr: err}
+	}
+	backendHeaders(httpReq, sa)
+	// Compliance: route via host.http.do_stream so request-log captures the
+	// outbound call. Read entire body via the bridge, then fold SSE → completion.
+	stream, statusCode, respHdr, err := hostHTTPDoStream(httpReq)
+	if err != nil {
+		return nil, &execFailure{transportErr: fmt.Errorf("http_error: %w", err)}
+	}
+	defer stream.Close()
+	reader := newHostStreamReader(stream)
+	if statusCode >= 400 {
+		payload, _ := io.ReadAll(reader)
+		return nil, &execFailure{status: statusCode, body: string(payload), respHdr: respHdr}
+	}
+	completion, err := aggregateCompletion(reader, model)
+	if err != nil {
+		return nil, &execFailure{status: http.StatusOK, body: err.Error(), aggErr: err}
+	}
+	return completion, nil
+}
+
+// finishExecuteFailure records the final failure of handleExecExecute. The
+// three branches are the historical single-shot accounting, unchanged:
+// transport errors only publish usage; in-stream aggregate errors also feed
+// the pair cooldown; >=400 additionally feeds the rate-limit registry and
+// the lifecycle reconcile, and returns the status-wrapped translator error
+// so the host cools this credential.
+func finishExecuteFailure(reqModel, upstreamModel, authUID, usedAuthID string, sa *storedAuth, started time.Time, fail *execFailure) error {
+	if fail.transportErr != nil {
+		publishUsage(reqModel, upstreamModel, authUID, started, usage.Detail{}, true, 0, fail.transportErr.Error())
+		return fail.transportErr
+	}
+	if fail.aggErr != nil {
+		publishUsage(reqModel, upstreamModel, authUID, started, usage.Detail{}, true, 0, fail.aggErr.Error())
+		// Issue #35: in-stream frame errors / empty streams from the fold path
+		// feed the pair cooldown too (all three executor paths are wired).
+		noteModelCooldownFailure(usedAuthID, sa, upstreamModel, 0, fail.aggErr.Error())
+		return fail.aggErr
+	}
+	publishUsage(reqModel, upstreamModel, authUID, started, usage.Detail{}, true, fail.status, fail.body)
+	noteModelRateLimitFromPayload(authUID, upstreamModel, fail.status, fail.body)
+	// Issue #35: >=400 failures feed the per-(credential, model) cooldown
+	// table (6004 keeps its own registry — the classifier defers to it).
+	noteModelCooldownFailure(usedAuthID, sa, upstreamModel, fail.status, fail.body)
+	reconcileAfterExecutorError(usedAuthID, fail.status, fail.body)
+	// v0.12.18: 11102 model-catalog rejections become a bilingual,
+	// realm-aware actionable error; 0.9.14 adds 11115/WAF/Retry-After
+	// shapes on top (header-aware full translator).
+	// v0.9.17: wrap with the account-level HTTP status so the host
+	// applies its real cooldown policy to this credential.
+	return upstreamStatusError(fail.status, fail.body, translateChatUpstreamErrorFull(fail.status, fail.body, sa, fail.respHdr))
+}
+
 func handleExecExecute(raw []byte) ([]byte, error) {
 	var req pluginapi.ExecutorRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
@@ -833,48 +912,47 @@ func handleExecExecute(raw []byte) ([]byte, error) {
 	// prepareUpstreamBody does forceStream + normalizeTools + rewriteSystem +
 	// ensureSystemMessage + rewriteModel in ONE unmarshal/marshal pass.
 	body := prepareUpstreamBody(req.Payload, req.OriginalRequest, sa, upstreamModel)
-	httpReq, err := http.NewRequest(http.MethodPost, endpointChatFor(sa), bytes.NewReader(body))
-	if err != nil {
-		return nil, err
+	// Per-request account-failover loop (T17): try the prepared body against
+	// the configured account first; on an account-level 4xx (401/403/404/405)
+	// or 429 soft rate limit rebuild against the next candidate, up to
+	// retry_on_4xx times. Accounting runs once, against the credential that
+	// actually served (or finally failed) the request. 5xx/0/402 and business
+	// 400 never rotate — they keep the cross-request cooldown path.
+	budget := loadedRetryOn4xx()
+	curSA := sa
+	curBody := body
+	curAuthUID := authUID
+	usedAuthID := req.AuthID
+	for attempt := 0; ; attempt++ {
+		completion, fail := execExecuteAttempt(curBody, curSA, req.Model)
+		if fail == nil {
+			publishUsage(req.Model, upstreamModel, curAuthUID, started, usageDetailFromCompletion(completion), false, 0, "")
+			// v0.9.25: learn the real model behind a tier alias from the response echo.
+			noteLearnedRealModel(upstreamModel, modelFromCompletionPayload(completion))
+			invalidateAccountCredits(usedAuthID, curAuthUID)
+			return okEnvelope(pluginapi.ExecutorResponse{Payload: completion})
+		}
+		if !shouldRotateOnUpstreamErr(fail.status, fail.body) || attempt >= budget {
+			return nil, finishExecuteFailure(req.Model, upstreamModel, curAuthUID, usedAuthID, curSA, started, fail)
+		}
+		failedID := usedAuthID
+		if failedID == "" && curSA != nil {
+			failedID = curSA.Account.UID
+		}
+		// The failing account's session bindings are released so follow-up
+		// requests in those conversations re-assign elsewhere.
+		evictSessionBindingsForAuth(failedID)
+		nextID, nextSA, hasNext := pickNextAuthFn(failedID, upstreamModel)
+		if !hasNext || nextSA == nil {
+			return nil, finishExecuteFailure(req.Model, upstreamModel, curAuthUID, usedAuthID, curSA, started, fail)
+		}
+		curSA = nextSA
+		usedAuthID = nextID
+		curAuthUID = nextSA.Account.UID
+		// Re-prepare against the new account's stored identity so any
+		// per-account tool/schema/system rules apply.
+		curBody = prepareUpstreamBody(req.Payload, req.OriginalRequest, curSA, upstreamModel)
 	}
-	backendHeaders(httpReq, sa)
-	// Compliance: route via host.http.do_stream so request-log captures the
-	// outbound call. Read entire body via the bridge, then fold SSE → completion.
-	stream, statusCode, respHdr, err := hostHTTPDoStream(httpReq)
-	if err != nil {
-		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
-		return nil, fmt.Errorf("http_error: %w", err)
-	}
-	defer stream.Close()
-	reader := newHostStreamReader(stream)
-	if statusCode >= 400 {
-		payload, _ := io.ReadAll(reader)
-		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, string(payload))
-		noteModelRateLimitFromPayload(authUID, upstreamModel, statusCode, string(payload))
-		// Issue #35: >=400 failures feed the per-(credential, model) cooldown
-		// table (6004 keeps its own registry — the classifier defers to it).
-		noteModelCooldownFailure(req.AuthID, sa, upstreamModel, statusCode, string(payload))
-		reconcileAfterExecutorError(req.AuthID, statusCode, string(payload))
-		// v0.12.18: 11102 model-catalog rejections become a bilingual,
-		// realm-aware actionable error; 0.9.14 adds 11115/WAF/Retry-After
-		// shapes on top (header-aware full translator).
-		// v0.9.17: wrap with the account-level HTTP status so the host
-		// applies its real cooldown policy to this credential.
-		return nil, upstreamStatusError(statusCode, string(payload), translateChatUpstreamErrorFull(statusCode, string(payload), sa, respHdr))
-	}
-	completion, err := aggregateCompletion(reader, req.Model)
-	if err != nil {
-		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
-		// Issue #35: in-stream frame errors / empty streams from the fold path
-		// feed the pair cooldown too (all three executor paths are wired).
-		noteModelCooldownFailure(req.AuthID, sa, upstreamModel, 0, err.Error())
-		return nil, err
-	}
-	publishUsage(req.Model, upstreamModel, authUID, started, usageDetailFromCompletion(completion), false, 0, "")
-	// v0.9.25: learn the real model behind a tier alias from the response echo.
-	noteLearnedRealModel(upstreamModel, modelFromCompletionPayload(completion))
-	invalidateAccountCredits(req.AuthID, authUID)
-	return okEnvelope(pluginapi.ExecutorResponse{Payload: completion})
 }
 
 // executorStreamRequest wraps the host's executor.execute_stream RPC: the
@@ -926,7 +1004,7 @@ func handleExecStream(raw []byte) ([]byte, error) {
 	// No async stream id → fall back to synchronous chunk collection.
 	if req.StreamID == "" {
 		collector := &sseUsageCollector{}
-		chunks, statusCode, errCollect := collectUpstreamStream(body, sa, sseFramed, collector, upstreamModel)
+		chunks, statusCode, errCollect := collectUpstreamStream(body, sa, sseFramed, collector, upstreamModel, req.AuthID)
 		if errCollect != nil {
 			publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, errCollect.Error())
 			// Issue #35: the sync collector surfaces frame errors,

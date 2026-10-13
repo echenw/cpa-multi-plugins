@@ -120,6 +120,14 @@ func configure(raw []byte) {
 	nextLoginRegion := ""      // sticky: empty = keep current (issue #24)
 	nextStreamHeadTimeout := 0 // default off: 0 seconds
 
+	// retry_on_4xx: per-request account-failover budget. Applied ONLY when
+	// the key is present in config_yaml: a valid value is clamped to
+	// [0, 10] and applied; an unparseable value resets to the default 10.
+	// An absent key keeps the current budget so an unrelated reconfigure
+	// never silently lifts a `retry_on_4xx: 0` kill switch.
+	nextRetryOn4xx := retryOn4xxDefault
+	retryOn4xxSeen := false
+
 	nextPinned := map[string][]string{}
 	cfgURL, cfgKey := "", ""
 	if len(raw) > 0 {
@@ -157,8 +165,21 @@ func configure(raw []byte) {
 				if v, present := m["token_keepalive"]; present {
 					nextKeepaliveAuto = configScalarBool(v)
 				}
-				if v, present := m["scheduler_mode"]; present && configScalarString(v) == schedulerModeCredits {
-					nextSchedulerMode = schedulerModeCredits
+				if v, present := m["scheduler_mode"]; present {
+					switch configScalarString(v) {
+					case schedulerModeCredits:
+						nextSchedulerMode = schedulerModeCredits
+					case schedulerModeSession:
+						nextSchedulerMode = schedulerModeSession
+					}
+				}
+				if v, present := m["retry_on_4xx"]; present {
+					retryOn4xxSeen = true
+					if n, ok := parseRetryOn4xxLine("retry_on_4xx: " + configScalarString(v)); ok {
+						nextRetryOn4xx = clampRetryOn4xx(n)
+					} else {
+						nextRetryOn4xx = retryOn4xxDefault
+					}
 				}
 				if v, present := m["usage_report_url"]; present {
 					cfgURL = configScalarString(v)
@@ -191,6 +212,16 @@ func configure(raw []byte) {
 					v = strings.Trim(v, "\"'")
 					if v == schedulerModeCredits {
 						nextSchedulerMode = schedulerModeCredits
+					} else if v == schedulerModeSession {
+						nextSchedulerMode = schedulerModeSession
+					}
+				}
+				if strings.HasPrefix(line, "retry_on_4xx:") {
+					retryOn4xxSeen = true
+					if n, ok := parseRetryOn4xxLine(line); ok {
+						nextRetryOn4xx = clampRetryOn4xx(n)
+					} else {
+						nextRetryOn4xx = retryOn4xxDefault
 					}
 				}
 				if strings.HasPrefix(line, "usage_report_url:") {
@@ -294,6 +325,10 @@ func configure(raw []byte) {
 	schedulerModeMu.Lock()
 	schedulerMode = nextSchedulerMode
 	schedulerModeMu.Unlock()
+
+	if retryOn4xxSeen {
+		setRetryOn4xx(nextRetryOn4xx)
+	}
 
 	keepaliveAutoMu.Lock()
 	keepaliveAuto = nextKeepaliveAuto
