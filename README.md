@@ -1,3 +1,5 @@
+> 二次开发自 mmqz/cpa-multi-plugins（MIT），基线 208a4194e41cf4e6a3a92529fda8f3517df5ae44
+
 # cpa-multi-plugins
 
 Provider plugins for [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI). Each plugin merges the regional variants of one provider family behind a single identifier and compiles to a C-shared library (`.so` / `.dll` / `.dylib`) for linux amd64/arm64, darwin amd64/arm64 and windows amd64.
