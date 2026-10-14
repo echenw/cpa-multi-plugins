@@ -183,7 +183,7 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
 <body>
 <div class="wrap">
   <h1>QoderWork 账号面板</h1>
-  <div class="sub">积分余额 · 每日权益（CN/Intl · 09:00/21:00）· 耗尽自动关</div>
+  <div class="sub">积分余额 · 每日权益（qoder cn/qoder · 09:00/21:00）· 耗尽自动关</div>
   <div id="authBox" class="card" style="display:none;margin-bottom:16px">
     <div style="margin-bottom:8px;color:var(--mut)">需要管理密钥（management key）才能访问账号数据。从 CPA 主面板嵌入时会自动获取，无需输入。错误密钥请勿连点，避免 IP 封禁。</div>
     <div style="display:flex;gap:8px">
@@ -193,22 +193,22 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
   </div>
   <div class="bar">
     <button id="loginBtn" onclick="openLoginModal()">授权登录</button>
-    <span class="toggle" title="授权登录的目标渠道（默认 Intl）">
-      <button type="button" class="lreg" data-login-region="cn" onclick="pickLoginRegion('cn',this)">CN</button>
-      <button type="button" class="lreg on" data-login-region="intl" onclick="pickLoginRegion('intl',this)">Intl</button>
+    <span class="toggle" title="授权登录的目标渠道（默认 qoder）">
+      <button type="button" class="lreg" data-login-region="cn" onclick="pickLoginRegion('cn',this)">qoder cn</button>
+      <button type="button" class="lreg on" data-login-region="intl" onclick="pickLoginRegion('intl',this)">qoder</button>
     </span>
     <button class="sec" id="importBtn" onclick="openImportModal()">导入 QoderWork 凭证</button>
     <button id="refreshBtn" onclick="load(true,this)">刷新数据</button>
     <button class="sec" id="checkinAllBtn" onclick="checkinAll(this)">全部签到</button>
     <button class="sec" id="modelDisableBtn" onclick="modelCtlToggle(this)" title="按渠道勾选启用/禁用模型（写入 oauth-excluded-models 子键）">模型禁用</button>
     
-    <label class="toggle" title="全部账号 09:00 / 21:00 · campaigns 权益通道，CN 与 Intl 均生效"><input type="checkbox" id="autoToggle" onchange="toggleAuto(this.checked)"> 自动签到</label>
+    <label class="toggle" title="全部账号 09:00 / 21:00 · campaigns 权益通道，qoder cn 与 qoder 均生效"><input type="checkbox" id="autoToggle" onchange="toggleAuto(this.checked)"> 自动签到</label>
     <span class="toggle" id="svtime"></span>
   </div>
   <div class="filter-bar" id="filterBar">
     <button type="button" class="ftag active" data-region="all" onclick="filterRegion('all',this)">全部 <span class="cnt" id="cntAll">0</span></button>
-    <button type="button" class="ftag" data-region="cn" onclick="filterRegion('cn',this)">CN <span class="cnt" id="cntCn">0</span></button>
-    <button type="button" class="ftag" data-region="intl" onclick="filterRegion('intl',this)">Intl <span class="cnt" id="cntIntl">0</span></button>
+    <button type="button" class="ftag" data-region="cn" onclick="filterRegion('cn',this)">qoder cn <span class="cnt" id="cntCn">0</span></button>
+    <button type="button" class="ftag" data-region="intl" onclick="filterRegion('intl',this)">qoder <span class="cnt" id="cntIntl">0</span></button>
     <button type="button" class="ftag" data-region="exhausted" onclick="filterRegion('exhausted',this)">耗尽 <span class="cnt" id="cntExhausted">0</span></button>
   </div>
   <div class="summary card" id="summaryBox" style="display:none"></div>
@@ -235,7 +235,12 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
       <button type="button" class="modal-x" onclick="closeImportModal()" aria-label="关闭">×</button>
     </div>
     <div class="modal-bd">
-      <p class="hint">两种粘贴导入（单框单按钮，后端按内容自动识别）：① PAT — 到 <a href="https://qoder.com.cn/settings/personal-access-tokens" target="_blank" rel="noopener">qoder.com.cn → 设置 → Personal Access Tokens</a> 创建 PAT（pt- 开头），粘贴后自动换取 jobToken；② 第三方导出 JSON — 直接粘贴导出的 JSON（单个对象或数组），CN / Intl 按条目自动分区。保存为 <code>qoder-&lt;region&gt;-&lt;uid&gt;.json</code>。</p>
+      <p class="hint">两种粘贴导入（单框单按钮，后端按内容自动识别）：① PAT — 到 <a href="https://qoder.com.cn/settings/personal-access-tokens" target="_blank" rel="noopener">qoder.com.cn → 设置 → Personal Access Tokens</a> 创建 PAT（pt- 开头），粘贴后自动换取 jobToken；② 第三方导出 JSON — 直接粘贴导出的 JSON（单个对象或数组），qoder cn / qoder 按条目自动分区。保存为 <code>qoder-&lt;region&gt;-&lt;uid&gt;.json</code>。</p>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+        <span class="toggle">PAT 渠道（默认 qoder；JSON 按条目自动分区，不受此影响）</span>
+        <button type="button" class="lreg" data-import-region="cn" onclick="pickImportRegion('cn',this)">qoder cn</button>
+        <button type="button" class="lreg on" data-import-region="intl" onclick="pickImportRegion('intl',this)">qoder</button>
+      </div>
       <textarea id="importPAT" placeholder="pt-xxxxxxxxxxxxxxxxxxxxxxxx&#10;或粘贴导出的 JSON（[{…}, {…}] 或 {…}）" autocomplete="off" style="width:100%;min-height:120px;padding:8px 10px;font-family:ui-monospace,monospace;font-size:12px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--fg);resize:vertical;"></textarea>
       <p class="hint" style="margin-top:8px;opacity:0.7">PAT 长期有效（可在创建时设置过期时间）。插件存储 PAT 用于 jrt- 过期后自动续期，无需重新导入。JSON 导入的 token 按原样保存，后续由保活/刷新接管新鲜度。</p>
     </div>
@@ -254,9 +259,9 @@ button .spin{border-color:var(--on-acc);border-top-color:transparent}
     <div class="modal-bd">
       <p class="hint">在弹窗内完成 Qoder 设备授权：先打开授权链接完成浏览器登录，再把浏览器回调地址粘贴回来提交。关闭弹窗不会中断已开始的登录（10 分钟内可重新打开继续）。</p>
       <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
-        <span class="toggle">渠道（默认 Intl，切换会重新开始登录）</span>
-        <button type="button" class="lreg" data-login-modal-region="cn" onclick="pickLoginModalRegion('cn',this)">CN</button>
-        <button type="button" class="lreg on" data-login-modal-region="intl" onclick="pickLoginModalRegion('intl',this)">Intl</button>
+        <span class="toggle">渠道（默认 qoder，切换会重新开始登录）</span>
+        <button type="button" class="lreg" data-login-modal-region="cn" onclick="pickLoginModalRegion('cn',this)">qoder cn</button>
+        <button type="button" class="lreg on" data-login-modal-region="intl" onclick="pickLoginModalRegion('intl',this)">qoder</button>
       </div>
       <p class="hint" style="margin-bottom:6px">步骤 1：复制授权链接并在新标签页打开（弹窗保持打开）</p>
       <div style="display:flex;gap:8px;margin-bottom:12px">
@@ -404,16 +409,19 @@ function bindCardActions(root){
     });
   });
 }
+// Display-only region label (no identity effect): stored region values stay
+// cn/intl everywhere (data-region, login args, API payloads); only the
+// human-facing text renders as qoder cn / qoder.
+function regionLabel(r){return (r||"cn")==="intl"?"qoder":"qoder cn"}
 function card(a){
   const plan=(a.plan||"unknown").toLowerCase();
   const ci=a.checkin||{}, cr=a.credits;
   const exhausted=!!a.exhausted||(!!cr&&(cr.total_remain||0)===0&&((cr.total_used||0)>0||(cr.total_size||0)>0||(cr.packages&&cr.packages.length)));
   const region=a.region||"cn";
-  
   const disabled=!!a.disabled;
   const selected=!!a.selected;
   const isIntl=(a.region||"cn")==="intl";
-  const regionBadge=`<span class="badge ${isIntl?"global":"cn"}">${isIntl?"Intl":"CN"}</span>`;
+  const regionBadge=`<span class="badge ${isIntl?"global":"cn"}">${isIntl?"qoder":"qoder cn"}</span>`;
   // 签到 button + (CN only) 领取Pro button.
   // v0.12.80: both regions ride the campaign dialect (campaign.go) — the
   // legacy CN daily-check-in is DISABLED upstream. An inactive summary now
@@ -637,7 +645,7 @@ function renderSummary(accounts){
       <div class="pb-meta">可用 ${remain} · 已用 ${used} · 池 ${total||0}（签到加包会抬高池和可用，不等于没消耗）</div>
     </div>
     ${currentFilter==="all"?`
-    <div class="pb-meta" style="margin-top:10px">CN 可用 ${cnRemain} / 已用 ${cnUsed} · Intl 可用 ${intlRemain} / 已用 ${intlUsed}</div>
+    <div class="pb-meta" style="margin-top:10px">qoder cn 可用 ${cnRemain} / 已用 ${cnUsed} · qoder 可用 ${intlRemain} / 已用 ${intlUsed}</div>
     `:`
     <div class="pb-meta" style="margin-top:10px">全部账号池：可用 ${allRemain} · 已用 ${allUsed} · 池 ${allTotal||0}</div>
     `}
@@ -754,7 +762,7 @@ function checkinResultToast(res, who){
   const name=res.nickname||who||"账号";
   if(res.error){toast(name+"：签到失败","err",asText(res.error));return}
   if(res.reason==="global"||(/国际版|不支持/.test(asText(res.message)))){
-    toast(name+"：国际版无需签到","warn",asText(res.message)||"请用领取专家加油包");return;
+    toast(name+"：qoder 无需签到","warn",asText(res.message)||"请用领取专家加油包");return;
   }
   // v0.8.41: key on the structured reason. The old /今日/ text match
   // rendered "今日暂无可直接签领的权益…" and "今日名额已发完…" — both
@@ -846,7 +854,8 @@ async function selectAuth(idx, btn){
     }
     activeAuthId=d.active_auth||idx;
     const who=d.nickname||idx;
-    const region="CN";
+    const picked=(lastAccounts||[]).find(x=>x.auth_index===idx);
+    const region=regionLabel(picked&&picked.region);
     toast("已选用","ok",who+" · "+region);
     // Re-render from local state for instant feedback, then soft reload
     (lastAccounts||[]).forEach(a=>{a.selected=(a.auth_index===activeAuthId);});
@@ -914,9 +923,9 @@ async function checkinAll(btn){
     }else if(ok){
       toast("批量签到："+ok+" 成功"+(already?" / "+already+" 今日已签":""),"ok",detail);
     }else if(already||skippedCN){
-      toast("无需签到","ok",detail||"CN 今日已签");
+      toast("无需签到","ok",detail||"qoder cn 今日已签");
     }else if(!rs.length && !eligible){
-      toast("没有需要签到的 CN 账号","warn",detail||"");
+      toast("没有需要签到的 qoder cn 账号","warn",detail||"");
     }else{
       toast("没有需要签到的账号","warn",detail);
     }
@@ -942,6 +951,7 @@ async function toggleAuto(on){
 function openImportModal(){
   const m=document.getElementById("importModal");
   m.classList.add("show");
+  syncImportRegionUI();
   const ta=document.getElementById("importPAT");
   if(ta) setTimeout(()=>ta.focus(),50);
 }
@@ -950,6 +960,17 @@ function closeImportModal(){
 }
 function onImportMaskClick(e){
   if(e.target===document.getElementById("importModal")) closeImportModal();
+}
+// PAT import region (CN/Intl pills in the import modal, default Intl).
+// JSON credential path is unaffected — per-entry regions ride the dump.
+let importRegion="intl";
+function syncImportRegionUI(){
+  document.querySelectorAll("[data-import-region]").forEach(b=>b.classList.toggle("on",b.dataset.importRegion===importRegion));
+}
+function pickImportRegion(r,btn){
+  importRegion=r;
+  syncImportRegionUI();
+  if(btn)btn.blur();
 }
 async function importAuth(btn){
   const ta=document.getElementById("importPAT");
@@ -964,14 +985,14 @@ async function importAuth(btn){
       try{
         const probe=JSON.parse(raw);
         if(probe&&typeof probe==="object"&&typeof probe.pat==="string"){
-          body=JSON.stringify({pat:probe.pat,region:probe.region});
+          body=JSON.stringify({pat:probe.pat,region:(typeof probe.region==="string"&&probe.region)||importRegion});
           isJSON=false;
         }else{body=raw;isJSON=true}
       }catch(e){body=raw;isJSON=true}
     }else{body=raw;isJSON=true}
   }else{
     if(!raw.startsWith("pt-")){toast("PAT 必须以 pt- 开头，或粘贴导出的 JSON","warn");return}
-    body=JSON.stringify({pat:raw});
+    body=JSON.stringify({pat:raw,region:importRegion});
   }
   busy(btn,true);
   try{
@@ -1056,7 +1077,7 @@ function handleLoginResult(d){
   if(!d)return false;
   if(d.status==="success"){
     stopLoginPoll();
-    toast("授权成功","ok",(d.nickname||d.uid||"")+" · "+(d.region||loginRegion)+" → "+(d.file||""));
+    toast("授权成功","ok",(d.nickname||d.uid||"")+" · "+regionLabel(d.region||loginRegion)+" → "+(d.file||""));
     closeLoginModal();
     load(true);
     return true;
@@ -1093,7 +1114,7 @@ async function startLoginModal(btn){
     if(!d||!d.auth_url||!d.state){setLoginStatus("启动失败："+((d&&d.error)||"unknown"));toast("授权登录启动失败","err",(d&&d.error)||"unknown");return}
     loginModalState=d.state;loginModalExpiresAt=d.expires_at||"";
     if(urlEl)urlEl.value=d.auth_url;
-    setLoginStatus("已生成 "+(d.region||loginRegion)+" 授权链接（有效期至 "+(loginModalExpiresAt||"?")+ "），请点打开链接完成授权；每 5 秒自动轮询。");
+    setLoginStatus("已生成 "+regionLabel(d.region||loginRegion)+" 授权链接（有效期至 "+(loginModalExpiresAt||"?")+ "），请点打开链接完成授权；每 5 秒自动轮询。");
     stopLoginPoll();
     loginPollTimer=setInterval(pollLoginOnce,5000);
   }catch(e){setLoginStatus("启动失败："+(e.message||String(e)));toast("授权登录失败","err",e.message||String(e))}

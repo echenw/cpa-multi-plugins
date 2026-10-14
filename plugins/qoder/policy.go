@@ -256,12 +256,12 @@ func chatUpstreamError(status int, body string) error {
 }
 
 // notePrefix renders the region/disabled head of an auth-card note, without
-// the credit segment. Kept separate so syncAuthNote can rebuild a note while
-// preserving a previously known credit segment.
+// the credit segment. The region slot carries the display-only label
+// (regionDisplayName); stored Region values are untouched.
 func notePrefix(sa *storedAuth, disabled bool) string {
-	region := "CN"
+	region := regionDisplayCN
 	if sa != nil && authRegion(sa) == regionIntl {
-		region = "INTL"
+		region = regionDisplayIntl
 	}
 	parts := []string{region}
 	if disabled {
@@ -278,7 +278,11 @@ func creditSegmentFromNote(note string) string {
 	segments := make([]string, 0, len(parts))
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
-		if part == "" || part == "CN" || part == "INTL" || part == "已禁用" {
+		// Display-only prefix slots: current labels plus the legacy bare
+		// CN/INTL shorthands (old notes in the wild still carry them —
+		// stripping must keep working after the relabel).
+		if part == "" || part == regionDisplayCN || part == regionDisplayIntl ||
+			part == "CN" || part == "INTL" || part == "已禁用" {
 			continue
 		}
 		// v0.8.28: the 【用量】 segment belongs to the usage-note writer, not
@@ -341,15 +345,17 @@ func displayNoteWithPrev(sa *storedAuth, cr *creditsSummary, disabled bool, prev
 	return note
 }
 
-// labelForAuth adds [CN] for host labels.
+// labelForAuth renders the host credential label with the display-only
+// region tag ([qoder cn] / [qoder]). Filenames, stored Region values and
+// routing are untouched — only this human-facing string changes.
 func labelForAuth(sa *storedAuth) string {
 	base := "QoderWork"
 	if sa != nil && strings.TrimSpace(sa.Account.Nickname) != "" {
 		base = strings.TrimSpace(sa.Account.Nickname)
 	}
-	tag := "CN"
-	if "cn" == "global" {
-		tag = "CN"
+	tag := regionDisplayCN
+	if sa != nil && authRegion(sa) == regionIntl {
+		tag = regionDisplayIntl
 	}
 	return base + " [" + tag + "]"
 }

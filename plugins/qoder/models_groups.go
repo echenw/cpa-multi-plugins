@@ -41,13 +41,11 @@ var modelGroupRegionOrder = []string{"cn", "intl"}
 // modelGroupRegionLabel renders the human-facing region title. Keep in sync
 // with the panel badges.
 func modelGroupRegionLabel(region string) string {
-	switch region {
-	case "cn":
-		return "CN（qoder.com.cn）"
-	case "intl":
-		return "Intl（qoder.com）"
+	switch normalizeRegion(region) {
+	case regionIntl:
+		return regionDisplayIntl + "（qoder.com）"
 	default:
-		return region
+		return regionDisplayCN + "（qoder.com.cn）"
 	}
 }
 

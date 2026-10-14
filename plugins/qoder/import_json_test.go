@@ -338,3 +338,67 @@ func TestImportRawPATBody(t *testing.T) {
 		t.Fatalf("raw PAT must persist once, saves=%d", len(saves))
 	}
 }
+
+// TestImportModalPATRegionSelector pins the review finding 1 fix: the import
+// modal must expose a CN/Intl selector (default Intl) and importAuth must
+// post the selected region with a PAT body ({pat, region}). JSON path stays
+// untouched — per-entry regions ride the dump.
+func TestImportModalPATRegionSelector(t *testing.T) {
+	html := string(panelHTML)
+	// Selector pills live in the import modal, default Intl.
+	if !strings.Contains(html, `data-import-region="cn"`) {
+		t.Fatal("import modal missing CN pill (data-import-region=\"cn\")")
+	}
+	if !strings.Contains(html, `class="lreg on" data-import-region="intl"`) {
+		t.Fatal("import modal Intl pill must default on")
+	}
+	if !strings.Contains(html, `class="lreg" data-import-region="cn"`) {
+		t.Fatal("import modal CN pill must default off")
+	}
+	// Pills must sit inside the import modal (not login modal / top bar).
+	imp := strings.Index(html, `id="importModal"`)
+	cnPill := strings.Index(html, `data-import-region="cn"`)
+	login := strings.Index(html, `id="loginModal"`)
+	if imp < 0 || cnPill < 0 || login < 0 || !(imp < cnPill && cnPill < login) {
+		t.Fatal("import region pills must sit inside the import modal")
+	}
+	// importAuth posts the selected region for raw PAT input.
+	if !strings.Contains(html, `body=JSON.stringify({pat:raw,region:importRegion})`) {
+		t.Fatal("importAuth must post {pat, region} for raw PAT input")
+	}
+	// A pasted {"pat":...} wrapper keeps an explicit region, else the pill.
+	if !strings.Contains(html, `region:(typeof probe.region==="string"&&probe.region)||importRegion`) {
+		t.Fatal("importAuth must carry probe.region || importRegion for PAT wrapper")
+	}
+	// JSON credential path unchanged: raw dump posted as-is, no region injection.
+	if !strings.Contains(html, `}else{body=raw;isJSON=true}`) {
+		t.Fatal("JSON credential path must post the dump as-is")
+	}
+}
+
+// TestImportPATCNViaUIBody is the hermetic end of the UI wiring: the exact
+// body importAuth now sends for a CN-pill PAT ({pat, region:"cn"}) must land
+// in the cn file. Stubbed exchange + persist, no live network.
+func TestImportPATCNViaUIBody(t *testing.T) {
+	stubPATExchange(t, "uid-PAT-UI-CN-1", "pat-ui-cn-1")
+	var saves []string
+	stubLoginSave(t, &saves)
+	status, payload := callPanelLoginRoute(t, "/import", `{"pat":"pt-TEST-PAT-UI-CN-001","region":"cn"}`)
+	if status != http.StatusOK {
+		t.Fatalf("UI CN PAT status=%d payload=%v", status, payload)
+	}
+	if payload["success"] != true || payload["region"] != "cn" {
+		t.Fatalf("UI CN PAT must succeed in cn: %v", payload)
+	}
+	if len(saves) != 1 {
+		t.Fatalf("UI CN PAT must persist once, saves=%d", len(saves))
+	}
+	name, doc := savedDoc(t, saves[0])
+	if name != "qoder-cn-uid-PAT-UI-CN-1.json" {
+		t.Fatalf("UI CN PAT file=%q want qoder-cn-uid-PAT-UI-CN-1.json", name)
+	}
+	region, uid := docRegionUID(t, doc)
+	if region != "cn" || uid != "uid-PAT-UI-CN-1" {
+		t.Fatalf("UI CN PAT doc region=%q uid=%q", region, uid)
+	}
+}

@@ -19,7 +19,24 @@ const (
 
 	domainCN   = "qoder.com.cn"
 	domainIntl = "qoder.com"
+
+	// Display-only region labels (no identity effect): the panel, notes
+	// and host labels render these instead of the bare CN/Intl realm
+	// shorthands. Stored Region values, routing, endpoints, filenames and
+	// import logic keep using regionCN/regionIntl untouched.
+	regionDisplayCN   = "qoder cn"
+	regionDisplayIntl = "qoder"
 )
+
+// regionDisplayName maps a stored region hint onto its display-only label.
+// Unknown/empty hints fall back to the CN label (same default side as
+// normalizeRegion); identity-bearing values are never altered.
+func regionDisplayName(region string) string {
+	if normalizeRegion(region) == regionIntl {
+		return regionDisplayIntl
+	}
+	return regionDisplayCN
+}
 
 var (
 	// v0.8.45 (deprecated): login_dialect was a v0.8.40 Intl-only opt-in
