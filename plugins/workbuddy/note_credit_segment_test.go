@@ -41,10 +41,14 @@ func TestCreditSegmentDropsLegacyPreMarkerResidue(t *testing.T) {
 
 func TestCreditSegmentKeepsPlainCredits(t *testing.T) {
 	cases := map[string]string{
-		"INTL · 余410 已用0 池410": "余410 已用0 池410",
-		"CN · 耗尽 · 余0 已用500":   "耗尽 · 余0 已用500",
-		"Global · 余12 已用3 池15": "余12 已用3 池15",
-		"INTL · 积分未知":          "",
+		"INTL · 余410 已用0 池410":         "余410 已用0 池410",
+		"CN · 耗尽 · 余0 已用500":           "耗尽 · 余0 已用500",
+		"Global · 余12 已用3 池15":         "余12 已用3 池15",
+		"workbuddy cn · 耗尽 · 余0 已用500": "耗尽 · 余0 已用500",
+		"workbuddy ai · 余12 已用3 池15":   "余12 已用3 池15",
+		"workbuddy cn · 积分未知":          "",
+		"workbuddy ai · 已禁用 · 余3 已用2":  "余3 已用2",
+		"INTL · 积分未知":                  "",
 	}
 	for note, want := range cases {
 		if got := creditSegmentFromNote(note); got != want {
@@ -69,9 +73,9 @@ func TestDisplayNoteNoResidueRegression(t *testing.T) {
 		t.Fatalf("base note still carries usage residue: %q", base)
 	}
 	// The legacy INTL prefix in prev is stripped (safe-reader fallback) and
-	// the note is rebuilt with the current CN prefix; the live credit
+	// the note is rebuilt with the current workbuddy cn prefix; the live credit
 	// segment itself must survive.
-	if !strings.HasPrefix(base, "CN · 余410 已用0 池410") {
+	if !strings.HasPrefix(base, "workbuddy cn · 余410 已用0 池410") {
 		t.Fatalf("displayNoteWithPrev lost the live credit segment: %q", base)
 	}
 }

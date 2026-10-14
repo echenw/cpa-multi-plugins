@@ -113,11 +113,11 @@ func TestDisplayNote(t *testing.T) {
 	cn := &storedAuth{Auth: storedTokens{Domain: "www.codebuddy.cn"}}
 	gl := &storedAuth{Auth: storedTokens{Domain: "www.workbuddy.ai"}}
 	note := displayNote(cn, &creditsSummary{TotalRemain: 12, TotalUsed: 8, TotalSize: 20}, false)
-	if !strings.Contains(note, "CN") || !strings.Contains(note, "12") || !strings.Contains(note, "8") {
+	if !strings.Contains(note, "workbuddy cn") || !strings.Contains(note, "12") || !strings.Contains(note, "8") {
 		t.Fatalf("cn note = %q", note)
 	}
 	note = displayNote(gl, &creditsSummary{TotalRemain: 0, TotalUsed: 250, TotalSize: 250}, false)
-	if !strings.Contains(note, "Global") || !strings.Contains(note, "耗尽") {
+	if !strings.Contains(note, "workbuddy ai") || !strings.Contains(note, "耗尽") {
 		t.Fatalf("global note = %q", note)
 	}
 	note = displayNote(cn, &creditsSummary{TotalRemain: 0, TotalUsed: 5}, true)
@@ -225,7 +225,7 @@ func TestLabelForAuth(t *testing.T) {
 		Account: storedAccount{Nickname: "Bob"},
 	}
 	got := labelForAuth(sa)
-	if !strings.Contains(got, "Bob") || !strings.Contains(got, "Global") {
+	if !strings.Contains(got, "Bob") || !strings.Contains(got, "workbuddy ai") {
 		t.Fatalf("label=%q", got)
 	}
 }

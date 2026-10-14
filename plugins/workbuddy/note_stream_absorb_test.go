@@ -19,6 +19,10 @@ func TestCreditSegmentFromNote(t *testing.T) {
 	}{
 		{"CN · 余100 已用5", "余100 已用5"},
 		{"Global · 余9 已用1", "余9 已用1"},
+		{"workbuddy cn · 余100 已用5", "余100 已用5"},
+		{"workbuddy ai · 余9 已用1", "余9 已用1"},
+		{"workbuddy cn · 已禁用 · 余3 已用2", "余3 已用2"},
+		{"workbuddy ai · 积分未知", ""},
 		{"INTL · 已禁用 · 余3 已用2", "余3 已用2"},
 		{"CN · 积分未知", ""},
 		{"CN", ""},

@@ -172,11 +172,14 @@ func upstreamReadError(err error) error {
 // notePrefix renders the region/disabled head of an auth-card note, without
 // the credit segment. Kept separate so syncAuthNote can rebuild a note while
 // preserving a previously known credit segment.
+//
+// Display-only: the region head shows "workbuddy cn" / "workbuddy ai" while
+// the stored Region values stay "cn"/"global" (routing/identity untouched).
 func notePrefix(sa *storedAuth, disabled bool) string {
-	region := "CN"
+	region := "workbuddy cn"
 	switch accountRegion(sa) {
 	case "global":
-		region = "Global"
+		region = "workbuddy ai"
 	}
 	parts := []string{region}
 	if disabled {
@@ -206,8 +209,11 @@ func creditSegmentFromNote(note string) string {
 		// SAFE-READER FALLBACK (stored values): "INTL" is the retired-realm
 		// prefix older builds wrote into notes. It is stripped here so a
 		// legacy note never resurrects as a fake credit segment; no new
-		// notes ever carry it (notePrefix only emits CN/Global).
-		if part == "" || part == "CN" || part == "INTL" || part == "Global" || part == "已禁用" {
+		// notes ever carry it (notePrefix only emits workbuddy cn/ai).
+		// "CN"/"Global" are the pre-relabel display prefixes older builds
+		// wrote; they keep stripping so legacy notes still parse, while new
+		// notes carry "workbuddy cn"/"workbuddy ai".
+		if part == "" || part == "CN" || part == "INTL" || part == "Global" || part == "workbuddy cn" || part == "workbuddy ai" || part == "已禁用" {
 			continue
 		}
 		// v0.9.42: the 【用量】 segment belongs to the usage-note writer, not
@@ -279,16 +285,18 @@ func displayNoteWithPrev(sa *storedAuth, cr *creditsSummary, disabled bool, prev
 	return note
 }
 
-// labelForAuth adds [CN]/[Global] for host labels.
+// labelForAuth adds [workbuddy cn]/[workbuddy ai] for host labels.
+// Display-only: the bracket tag is the display name; stored Region values
+// and the "WorkBuddy"/nickname base stay exactly as-is.
 func labelForAuth(sa *storedAuth) string {
 	base := "WorkBuddy"
 	if sa != nil && strings.TrimSpace(sa.Account.Nickname) != "" {
 		base = strings.TrimSpace(sa.Account.Nickname)
 	}
-	tag := "CN"
+	tag := "workbuddy cn"
 	switch accountRegion(sa) {
 	case "global":
-		tag = "Global"
+		tag = "workbuddy ai"
 	}
 	return base + " [" + tag + "]"
 }

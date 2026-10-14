@@ -39,12 +39,14 @@ var modelGroupRealmOrder = []string{"cn", "global"}
 
 // modelGroupRealmLabel renders the human-facing realm title. Keep in sync
 // with the login-platform config description in main.go and the panel badges.
+// Display-only: the prefix is the display name (workbuddy cn / workbuddy ai);
+// realm keys stay "cn"/"global".
 func modelGroupRealmLabel(realm string) string {
 	switch realm {
 	case "cn":
-		return "CN（copilot.tencent.com）"
+		return "workbuddy cn（copilot.tencent.com）"
 	case "global":
-		return "Global（workbuddy.ai）"
+		return "workbuddy ai（workbuddy.ai）"
 	default:
 		return realm
 	}
