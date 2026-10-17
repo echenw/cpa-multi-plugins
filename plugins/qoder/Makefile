@@ -12,9 +12,9 @@ build:
 test:
 	$(GO) test -race -count=1 ./...
 
-# Result presentation and account-button behavior; no browser or network.
+# Result presentation, account buttons and OAuth links; no browser or network.
 test-panel:
-	node --test panel_checkin_test.cjs
+	node --test panel_checkin_test.cjs panel_login_test.cjs
 
 # Lint everything (requires gofmt + go vet; staticcheck/gocritic/unparam optional).
 lint:

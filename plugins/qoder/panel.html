@@ -1115,7 +1115,8 @@ async function startLoginModal(btn){
     const d=await api("/login/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({region:loginRegion})});
     if(!d||!d.auth_url||!d.state){setLoginStatus("启动失败："+((d&&d.error)||"unknown"));toast("授权登录启动失败","err",(d&&d.error)||"unknown");return}
     loginModalState=d.state;loginModalExpiresAt=d.expires_at||"";
-    if(urlEl)urlEl.value=d.auth_url;
+    // 宿主会 HTML 转义管理接口 JSON；还原 URL 分隔符后再显示、复制和打开。
+    if(urlEl)urlEl.value=d.auth_url.replace(/&amp;/g,"&");
     setLoginStatus("已生成 "+regionLabel(d.region||loginRegion)+" 授权链接（有效期至 "+(loginModalExpiresAt||"?")+ "），请点打开链接完成授权；每 5 秒自动轮询。");
     stopLoginPoll();
     loginPollTimer=setInterval(pollLoginOnce,5000);
