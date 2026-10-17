@@ -576,7 +576,7 @@ func enrichAuthMetadata(sa *storedAuth, cr *creditsSummary, disabled bool) map[s
 // populated card back to the "积分未知" placeholder.
 func enrichAuthMetadataWithPrev(sa *storedAuth, cr *creditsSummary, disabled bool, prevCredits string) map[string]any {
 	note := displayNoteWithPrev(sa, cr, disabled, prevCredits)
-	return map[string]any{
+	meta := map[string]any{
 		// Same classification the physical writes stamp — the panel and
 		// the host's auth listing must agree with the file on disk.
 		"auth_kind": "oauth",
@@ -586,4 +586,8 @@ func enrichAuthMetadataWithPrev(sa *storedAuth, cr *creditsSummary, disabled boo
 		"note":      note,
 		"disabled":  disabled,
 	}
+	if sa != nil && sa.Account.Email != "" {
+		meta["email"] = sa.Account.Email
+	}
+	return meta
 }

@@ -453,9 +453,9 @@ function card(a){
   const selectBtn=selected
     ? `<button class="done" disabled="disabled">使用中</button>`
     : (disabled?``:`<button class="sec" data-action="select" data-auth-index="${esc(a.auth_index)}">选用</button>`);
-  const refreshBtn=`<button class="sec" data-action="refresh" data-auth-index="${esc(a.auth_index)}" title="刷新积分">刷新</button>`;
+  const refreshBtn=`<button class="sec" data-action="refresh" data-auth-index="${esc(a.auth_index)}" title="刷新积分和账号资料">刷新</button>`;
   const badges=(selected?`<span class="badge" style="background:var(--acc-ring);color:var(--acc);border-color:var(--acc)">使用中</span>`:"")+(disabled?`<span class="badge disabled">已禁用</span>`:"")+(exhausted?`<span class="badge exhausted">耗尽</span>`:"")+regionBadge+`<span class="badge ${esc(plan)}">${esc(a.plan||"-")}</span>`;
-  const display=(a.nickname||a.label||a.name||"").replace(/^qoderwork-?/i,"");
+  const display=a.email||(a.nickname||a.label||a.name||"").replace(/^qoderwork-?/i,"");
   const nick=display||("u"+(a.uid||"").slice(-8));
   return `<div class="card${selected?" selected":""}" data-region="${region}" data-auth="${esc(a.auth_index)}">
   <h2>${esc(nick)} <span style="display:flex;gap:6px;align-items:center">${badges}</span></h2>
@@ -463,6 +463,7 @@ function card(a){
   ${coolingHTML}
   ${progressHTML(cr, disabled)}
   ${a.error?`<div class="row"><span class="k">错误</span><span class="v err">${esc(a.error)}</span></div>`:""}
+  ${a.profile_error?`<div class="row"><span class="k">账号资料</span><span class="v err">${esc(a.profile_error)}，可点刷新重试</span></div>`:""}
   <div class="actions">${selectBtn}${refreshBtn}${actionHTML}</div>
   </div>`;
 }
@@ -471,16 +472,22 @@ let lastAccounts=[];
 let activeAuthId="";
 let authFailCount=0;
 let authFailUntil=0;
-// Lazy-load: fetch credits for all cards that lack them, concurrently.
+function applyAccountProfile(target, source){
+  for(const key of ["email","nickname","profile_loaded","profile_error"]){
+    if(Object.prototype.hasOwnProperty.call(source,key)) target[key]=source[key];
+  }
+}
+// Lazy-load missing credits and identity, including old accounts with cached credits.
 // Each card fetches independently; failed ones retry once after 2s.
 function lazyLoadCredits(accounts){
-  const need=accounts.filter(a=>!a.credits&&!a.error&&!a.disabled);
+  const need=accounts.filter(a=>(a.uid&&!a.profile_loaded&&!a.profile_error)||(!a.credits&&!a.error&&!a.disabled));
   if(!need.length) return;
   need.forEach(a=>{
     const idx=a.auth_index;
     api(`/credits?auth_index=${encodeURIComponent(idx)}`)
       .then(d=>{
         const acct=(d.accounts||[])[0]||d;
+        if(acct) applyAccountProfile(a,acct);
         if(d.error){ a.error=d.error; }
         if(acct&&acct.credits){
           a.credits=acct.credits;
@@ -496,6 +503,7 @@ function lazyLoadCredits(accounts){
           api(`/credits?auth_index=${encodeURIComponent(idx)}`)
             .then(d=>{
               const acct=(d.accounts||[])[0]||d;
+              if(acct) applyAccountProfile(a,acct);
               if(acct&&acct.credits){ a.credits=acct.credits; a.exhausted=acct.exhausted; }
               if(acct&&acct.plan) a.plan=acct.plan;
               if(d.error||acct&&acct.error) a.error=d.error||acct.error;
@@ -747,7 +755,7 @@ async function load(force, btn){
     // Lazy-load credits for cards that don't have them yet.
     lazyLoadCredits(accounts);
     if(force){
-      const errN=accounts.filter(a=>a.error).length;
+      const errN=accounts.filter(a=>a.error||a.profile_error).length;
       const life=(d.lifecycle||[]).length;
       let extra=accounts.length+" 个账号";
       if(errN) extra+=" · "+errN+" 个有错误";
@@ -888,25 +896,28 @@ async function selectAuth(idx, btn){
 async function refreshCredits(idx, btn){
   busy(btn,true);
   try{
-    const d=await api(`/credits?auth_index=${encodeURIComponent(idx)}`);
+    const d=await api(`/credits?auth_index=${encodeURIComponent(idx)}&refresh_profile=1`);
     const acct=(d.accounts||[])[0]||d;
-    if(d.error||acct&&acct.error){
-      toast("刷新失败","err",d.error||(acct&&acct.error)||"未知错误");
-      busy(btn,false);
-      return;
-    }
-    // Update local state and re-render this card.
     const a=(lastAccounts||[]).find(x=>x.auth_index===idx);
     if(a){
+      applyAccountProfile(a,acct);
       if(acct.credits) a.credits=acct.credits;
       if(acct.exhausted!=null) a.exhausted=acct.exhausted;
       if(acct.plan) a.plan=acct.plan;
-      if(acct.error) a.error=acct.error; else a.error="";
+      a.error=d.error||acct.error||"";
       updateOneCard(a);
     }
-    const remain=acct&&acct.credits?acct.credits.total_remain:"?";
-    const who=acct&&acct.nickname?acct.nickname:idx;
-    toast("积分已刷新","ok",who+" · 剩余 "+remain);
+    if(d.error||acct.error){
+      toast("刷新失败","err",d.error||acct.error);
+      return;
+    }
+    const remain=acct.credits?acct.credits.total_remain:"?";
+    const who=acct.email||acct.nickname||idx;
+    if(acct.profile_error){
+      toast("积分已刷新，账号资料未更新","warn",acct.profile_error);
+    }else{
+      toast("账号已刷新","ok",who+" · 剩余 "+remain);
+    }
   }catch(e){
     toast("刷新失败","err",e.message||String(e));
   }finally{

@@ -13,22 +13,25 @@ import (
 
 // wbAccount is one row of the dashboard.
 type wbAccount struct {
-	AuthIndex string           `json:"auth_index"`
-	AuthID    string           `json:"auth_id,omitempty"`
-	Name      string           `json:"name"`
-	Label     string           `json:"label"`
-	Nickname  string           `json:"nickname"`
-	UID       string           `json:"uid"`
-	Region    string           `json:"region"` // "cn" or "global"
-	Plan      string           `json:"plan"`
-	Status    string           `json:"status"`
-	Disabled  bool             `json:"disabled"`
-	Exhausted bool             `json:"exhausted"`
-	Selected  bool             `json:"selected"` // panel active routing card
-	Credits   *creditsSummary  `json:"credits,omitempty"`
-	Checkin   *checkinSummary  `json:"checkin,omitempty"`
-	Cooling   []map[string]any `json:"cooling,omitempty"`
-	Error     string           `json:"error,omitempty"`
+	AuthIndex     string           `json:"auth_index"`
+	AuthID        string           `json:"auth_id,omitempty"`
+	Name          string           `json:"name"`
+	Label         string           `json:"label"`
+	Nickname      string           `json:"nickname"`
+	Email         string           `json:"email"`
+	ProfileLoaded bool             `json:"profile_loaded"`
+	ProfileError  string           `json:"profile_error,omitempty"`
+	UID           string           `json:"uid"`
+	Region        string           `json:"region"` // "cn" or "global"
+	Plan          string           `json:"plan"`
+	Status        string           `json:"status"`
+	Disabled      bool             `json:"disabled"`
+	Exhausted     bool             `json:"exhausted"`
+	Selected      bool             `json:"selected"` // panel active routing card
+	Credits       *creditsSummary  `json:"credits,omitempty"`
+	Checkin       *checkinSummary  `json:"checkin,omitempty"`
+	Cooling       []map[string]any `json:"cooling,omitempty"`
+	Error         string           `json:"error,omitempty"`
 }
 
 // credits/checkin/plan fields are left empty — the panel renders skeletons
@@ -93,6 +96,13 @@ func buildDashboardEx(force, fetchCredits bool) map[string]any {
 					acct.Name = phys.Name
 				}
 			}
+			if fetchCredits {
+				if err := completeAccountProfile(f.AuthIndex, sa, force); err != nil {
+					acct.ProfileError = err.Error()
+				}
+			}
+			acct.Email = sa.Account.Email
+			acct.ProfileLoaded = sa.Account.ProfileLoaded
 			acct.Nickname = sa.Account.Nickname
 			acct.UID = sa.Account.UID
 			acct.Region = authRegion(sa)

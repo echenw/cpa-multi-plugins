@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -99,8 +100,9 @@ func refreshJobToken(jrt, region string) (*jobTokenResponse, error) {
 // Upstream returns: {"id":"...","name":"aliyun...","username":"...",
 // "organization_id":"","organization_name":"",...}
 type userInfoResponse struct {
-	ID               string `json:"id"`       // uuid — used as our UID
-	Name             string `json:"name"`     // display name
+	ID               string `json:"id"`   // uuid — used as our UID
+	Name             string `json:"name"` // display name
+	Email            string `json:"email"`
 	Username         string `json:"username"` // alternate uuid
 	Avatar           string `json:"avatar"`
 	OrganizationID   string `json:"organization_id"`
@@ -108,28 +110,33 @@ type userInfoResponse struct {
 	UserType         string `json:"user_type"` // may be absent; falls back to "personal_professional_trial"
 }
 
-// fetchUserInfo queries /api/v1/userinfo with a jt- Bearer to populate the
+// fetchUserInfo queries /api/v1/userinfo with the account Bearer to populate the
 // auth's identity fields (uid, nickname, user_type for COSY signing).
 // The endpoint returns plain JSON (no envelope) — same as jobToken/exchange.
-func fetchUserInfo(jt, region string) (*userInfoResponse, error) {
-	req, err := http.NewRequest(http.MethodGet, endpointUserInfoForRegion(region), nil)
+func fetchUserInfo(token, region string) (*userInfoResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpointUserInfoForRegion(region), nil)
 	if err != nil {
 		return nil, err
 	}
 	commonHeaders(req)
-	req.Header.Set("Authorization", "Bearer "+jt)
+	req.Header.Set("Authorization", "Bearer "+token)
 	resp, err := sharedHTTPClient().Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("userinfo read: %w", err)
+	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("userinfo: http %d body=%s", resp.StatusCode, truncateRedacted(string(raw), 200))
+		return nil, fmt.Errorf("userinfo: http %d", resp.StatusCode)
 	}
 	var out userInfoResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, fmt.Errorf("userinfo parse: %w (body=%s)", err, truncateRedacted(string(raw), 200))
+		return nil, fmt.Errorf("userinfo parse: %w", err)
 	}
 	return &out, nil
 }
@@ -163,10 +170,19 @@ func buildStoredAuthFromJobToken(pat string, tok *jobTokenResponse, ui *userInfo
 			Region:        region,
 		},
 		Account: storedAccount{
-			UID:      uid,
-			Nickname: nickname,
+			UID:           uid,
+			Nickname:      nickname,
+			Email:         userInfoEmail(ui),
+			ProfileLoaded: ui != nil && strings.TrimSpace(ui.ID) == uid && uid != "",
 		},
 	}
+}
+
+func userInfoEmail(ui *userInfoResponse) string {
+	if ui == nil {
+		return ""
+	}
+	return strings.TrimSpace(ui.Email)
 }
 
 func uiUserType(ui *userInfoResponse) string {
@@ -625,9 +641,8 @@ func deviceExpiryUnix(tok *deviceTokenResponse) int64 {
 
 // buildStoredAuthFromDeviceToken maps a device-token grant onto storedAuth.
 // AccessToken=dt-, RefreshToken=drt-. When ui is nil (fast path during
-// PollLogin), UserID comes from the poll response and nickname is empty —
-// the panel fills it lazily on first load. preservePAT=false skips the
-// hostAuthList scan to avoid blocking auth-file persistence.
+// PollLogin), UserID and a temporary nickname come from the poll response;
+// the panel completes the identity via /credits after the auth file is saved.
 func buildStoredAuthFromDeviceToken(tok *deviceTokenResponse, ui *userInfoResponse, region string) *storedAuth {
 	expiresAt := deviceExpiryUnix(tok)
 	uid := tok.UserID
@@ -656,7 +671,8 @@ func buildStoredAuthFromDeviceToken(tok *deviceTokenResponse, ui *userInfoRespon
 			Domain:        domainForRegion(region),
 			Region:        region,
 		},
-		Account: storedAccount{UID: uid, Nickname: nickname},
+		Account: storedAccount{UID: uid, Nickname: nickname, Email: userInfoEmail(ui),
+			ProfileLoaded: ui != nil && strings.TrimSpace(ui.ID) == uid && uid != ""},
 	}
 }
 

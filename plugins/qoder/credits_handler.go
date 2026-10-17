@@ -146,16 +146,24 @@ func handleCreditsQuery(req pluginapi.ManagementRequest) map[string]any {
 					"auth_index": authIndex, "error": "load auth: " + err.Error(),
 				}}}
 			}
+			profileError := ""
+			forceProfile := len(req.Query["refresh_profile"]) > 0 && req.Query["refresh_profile"][0] == "1"
+			if err := completeAccountProfile(f.AuthIndex, sa, forceProfile); err != nil {
+				profileError = err.Error()
+			}
 			cr, err := fetchUserResource(sa)
 			acct := map[string]any{
-				"auth_index": authIndex,
-				"nickname":   sa.Account.Nickname,
-				"uid":        sa.Account.UID,
-				"region":     authRegion(sa),
-				"name":       f.Name,
-				"label":      f.Label,
-				"disabled":   f.Disabled,
-				"selected":   getActiveAuthID() == f.ID,
+				"auth_index":     authIndex,
+				"nickname":       sa.Account.Nickname,
+				"email":          sa.Account.Email,
+				"profile_loaded": sa.Account.ProfileLoaded,
+				"profile_error":  profileError,
+				"uid":            sa.Account.UID,
+				"region":         authRegion(sa),
+				"name":           f.Name,
+				"label":          f.Label,
+				"disabled":       f.Disabled,
+				"selected":       getActiveAuthID() == f.ID,
 			}
 			if err != nil {
 				acct["error"] = err.Error()
@@ -194,11 +202,14 @@ func handleCreditsQuery(req pluginapi.ManagementRequest) map[string]any {
 	}
 	// All accounts: return simplified list.
 	type acctCredits struct {
-		AuthIndex string          `json:"auth_index"`
-		Nickname  string          `json:"nickname"`
-		UID       string          `json:"uid"`
-		Credits   *creditsSummary `json:"credits,omitempty"`
-		Error     string          `json:"error,omitempty"`
+		AuthIndex     string          `json:"auth_index"`
+		Nickname      string          `json:"nickname"`
+		Email         string          `json:"email"`
+		ProfileLoaded bool            `json:"profile_loaded"`
+		ProfileError  string          `json:"profile_error,omitempty"`
+		UID           string          `json:"uid"`
+		Credits       *creditsSummary `json:"credits,omitempty"`
+		Error         string          `json:"error,omitempty"`
 	}
 	var out []acctCredits
 	for _, f := range files {
@@ -207,8 +218,13 @@ func handleCreditsQuery(req pluginapi.ManagementRequest) map[string]any {
 			out = append(out, acctCredits{AuthIndex: f.AuthIndex, Error: "load auth: " + err.Error()})
 			continue
 		}
+		profileError := ""
+		if err := completeAccountProfile(f.AuthIndex, sa, false); err != nil {
+			profileError = err.Error()
+		}
 		cr, err := fetchUserResource(sa)
-		ac := acctCredits{AuthIndex: f.AuthIndex, Nickname: sa.Account.Nickname, UID: sa.Account.UID}
+		ac := acctCredits{AuthIndex: f.AuthIndex, Nickname: sa.Account.Nickname, UID: sa.Account.UID,
+			Email: sa.Account.Email, ProfileLoaded: sa.Account.ProfileLoaded, ProfileError: profileError}
 		if err != nil {
 			ac.Error = err.Error()
 		} else {

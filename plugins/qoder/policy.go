@@ -353,6 +353,9 @@ func labelForAuth(sa *storedAuth) string {
 	if sa != nil && strings.TrimSpace(sa.Account.Nickname) != "" {
 		base = strings.TrimSpace(sa.Account.Nickname)
 	}
+	if sa != nil && strings.TrimSpace(sa.Account.Email) != "" {
+		base = strings.TrimSpace(sa.Account.Email)
+	}
 	tag := regionDisplayCN
 	if sa != nil && authRegion(sa) == regionIntl {
 		tag = regionDisplayIntl

@@ -511,9 +511,11 @@ type storedTokens struct {
 }
 
 type storedAccount struct {
-	UID          string `json:"uid"`
-	EnterpriseID string `json:"enterpriseId"`
-	Nickname     string `json:"nickname"`
+	UID           string `json:"uid"`
+	EnterpriseID  string `json:"enterpriseId"`
+	Nickname      string `json:"nickname"`
+	Email         string `json:"email,omitempty"`
+	ProfileLoaded bool   `json:"profile_loaded,omitempty"`
 }
 
 // apiEnvelope is the generic {code,msg,data} wrapper used by every QoderWork API.
@@ -553,12 +555,17 @@ func parseStored(raw []byte) (*storedAuth, error) {
 			UID           string `json:"uid"`
 			EnterpriseID  string `json:"enterpriseId"`
 			Nickname      string `json:"nickname"`
+			Email         string `json:"email"`
+			ProfileLoaded bool   `json:"profile_loaded"`
 		}
 		if err := json.Unmarshal(raw, &flat); err != nil {
 			return nil, fmt.Errorf("storage_parse_error: %w", err)
 		}
 		sa.Auth = storedTokens{AccessToken: flat.AccessToken, RefreshToken: flat.RefreshToken, PersonalToken: flat.PersonalToken, ExpiresAt: flat.ExpiresAt, Domain: flat.Domain}
-		sa.Account = storedAccount{UID: flat.UID, EnterpriseID: flat.EnterpriseID, Nickname: flat.Nickname}
+		sa.Account = storedAccount{UID: flat.UID, EnterpriseID: flat.EnterpriseID, Nickname: flat.Nickname, Email: flat.Email, ProfileLoaded: flat.ProfileLoaded}
+	}
+	if sa.Account.Email == "" {
+		_ = json.Unmarshal(probe["email"], &sa.Account.Email)
 	}
 	if sa.Auth.AccessToken == "" {
 		return nil, fmt.Errorf("parse_error: missing accessToken")

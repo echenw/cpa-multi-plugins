@@ -186,6 +186,9 @@ func refreshOneAuth(authIndex, authID string) (string, error) {
 // could only approximate that by carrying fields back by hand and would
 // silently drop whatever the next release forgets to list.
 func persistAuthTokens(authIndex string, sa *storedAuth) error {
+	mu := checkinLockFor(authIndex)
+	mu.Lock()
+	defer mu.Unlock()
 	phys, err := hostAuthGetPhysicalFn(authIndex)
 	if err != nil {
 		return err

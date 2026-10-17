@@ -224,6 +224,8 @@
 - **刷新返回解析**：主动保活与宿主刷新共用设备返回校验和到期解析；AT 接受 `token` / `device_token`，RT 必须完整；`expires_in` 按毫秒解析，缺失时读取 RFC3339 `expires_at`。不凭 AT 字段名称推断凭据类型，不完整的设备返回不落盘。
 - **PAT → jobToken**：`POST https://openapi.qoder.sh/api/v1/jobToken/exchange`，body `{personal_token:"pt-..."}`，返回 jt-/jrt-。
 - **登录落盘**：成功后立即返回 dt-/drt- 和 poll 中的 user_id，不等待用户信息或活动查询；返回的 AuthData.ID 留空，由宿主按文件路径注册，文件名仍为 `qoder-intl-<uid>.json`。账号列表出现其他新文件不能完成本次授权。
+- **账号资料补全**：凭据保存后，面板详情查询（`/credits`）调用对应地区的 `/api/v1/userinfo`，校验返回 ID 与授权 UID 一致，再合并 `account.nickname/email/profile_loaded` 及宿主展示用的顶层 `email`。已有账号也通过此入口补全；不修改 UID、文件名或凭据。邮箱优先展示，接口没有邮箱时保留昵称。
+- **资料失败与重试**：资料失败独立返回 `profile_error`，不将已保存的授权判为失败；卡片显示原因，刷新按钮重试资料请求。成功返回空邮箱也记录已加载，避免每次打开页面重复查询；全局或单卡刷新可重新获取。当前工作树仅静态核对，尚未实测授权及资料接口。
 - **兼容边界**：保留地区选择、合并插件标识和 `login_dialect` 配置的读写；`login_dialect` 仍不切换授权协议。现有凭据不迁移、不重写，活动资格由上游判定。
 
 ### Chat API (COSY-signed)
@@ -265,7 +267,8 @@
 - **Token 刷新**：`POST https://openapi.qoder.com.cn/api/v1/deviceToken/refresh`，body `{refresh_token:"drt-..."}`。
 - **PAT 导入**：`POST https://openapi.qoder.com.cn/api/v1/jobToken/exchange`。
 - **Token 字段**：`token` / `device_token`、`refresh_token`、`expires_at`、`expires_in`（毫秒）。登录成功即时返回，账号文件仍按 `qoder-cn-<uid>.json` 落盘。
-- 本轮只对齐 CN 授权链路，保留本仓 CN 原有活动、Cookie 与 native/derived 身份处理；国际版 UMID 不接入 CN。
+- **账号资料**：与 Intl 共用保存后补全和邮箱优先显示链路，请求 CN 的 `/api/v1/userinfo`；无邮箱的账号保留昵称。
+- 保留本仓 CN 原有活动、Cookie 与 native/derived 身份处理；国际版 UMID 不接入 CN。
 
 ### Chat API
 - **URL**: `POST https://gateway.qoder.com.cn/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1`
