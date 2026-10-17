@@ -15,8 +15,8 @@
 | `trae-intl` | Trae Intl | `api.marscode.com` / `core-normal.trae.ai` | `ono9krqynydwx5` | - | ❌ | 4/5 Web SOLO remote |
 | `trae-cn` | Trae Code CN | `api.trae.cn` / `trae-api-cn.mchost.guru` | `ono9krqynydwx5` | `solo_work_lite` ᵛ⁰·¹²·⁷⁹ | ✅ | 4/5 llm_utils_chat |
 | `trae-solo-cn` | Trae Work CN / SOLO CN | 同 trae-cn | `en1oxy7wnw8j9n` | `solo_work_lite` | ✅ | 4/5 |
-| `qoder-intl` | Qoder Intl | `qoder.com` / `api3.qoder.sh` | `732aef47-...` (desktop v0.4.3) | - | ✅(campaigns) | 5/5 COSY 签名 |
-| `qoder-cn` | Qoder CN | `qoder.cn` (auth) / `openapi.qoder.com.cn` (api) | `732aef47-...` (desktop v0.4.3) | - | ✅(campaigns) | 5/5 |
+| `qoder-intl` | Qoder Intl | `qoder.com` / `api3.qoder.sh` | `1c5e33e1-...` (reference device flow) | - | ✅(campaigns) | 5/5 COSY 签名 |
+| `qoder-cn` | Qoder CN | `qoder.com.cn` (auth) / `openapi.qoder.com.cn` (api) | `1c5e33e1-...` (reference device flow) | - | ✅(campaigns) | 5/5 |
 | `zcode`（zcode 分支） | 智谱 GLM 编码套餐（Z.AI + BigModel） | `zcode.z.ai`（控制面/网关）/ `api.z.ai` + `open.bigmodel.cn`（LLM） | 无（poll_token 中转） | - | —（claim 需验证码侧车） | 5/5 签名 V4 + anthropic 翻译 + off-peak 票务 |
 
 > ᵛ⁰·¹²·⁷⁹ issue #9：`llm_utils_chat` 仅接受 `function=solo_work_lite`（其余值一律流内
@@ -211,23 +211,20 @@
 
 ## Provider: qoder-intl
 
-### OAuth 流程 (device authorization, 官方桌面客户端 v0.4.3 同源)
-- **登录入口** (Nft wrapper): `GET https://qoder.com/users/sign-in?biz_variant=qoder&oauth_callback=<encoded Sft URL>`
-- **Sft 内层 URL**: `GET https://qoder.com/device/selectAccounts?challenge={challenge}&challenge_method=S256&nonce={nonce}&machine_id={machine_id}&client_id={client_id}&redirect_uri={redirect_uri}`
-- **client_id**: `732aef47-9cf2-46a2-95fe-4cebb5d0d1fa` (官方桌面客户端 v0.4.3，CN 与 Intl 共用；v0.8.45 起统一)
-- **redirect_uri**: `qoder-app://` (stable channel)
-- **machine_id**: 由 `machine_identity.go` 注入——优先调用官方 `<install>/resources/umid/runtime-info` 二进制获取真实机器指纹；缺失时退回到 per-uid 模拟身份（与官方 umid 输出形状一致）
-- **biz_variant**: `qoder` (用于 Nft wrapper)
-- **Token 轮询**: `GET https://openapi.qoder.sh/api/v1/deviceToken/poll?nonce={nonce}&verifier={verifier}&challenge_method=S256`
-  - HTTP 404/202 = pending
-- **Token 刷新**: `POST https://openapi.qoder.sh/api/v1/deviceToken/refresh` (body: `{refresh_token:"drt-..."}`)
-- **PAT → jobToken**: `POST https://openapi.qoder.sh/api/v1/jobToken/exchange`
-  - body: `{personal_token:"pt-..."}`
-  - 返回: `{token:"jt-...", refresh_token:"jrt-...", expires_in:24h, refresh_token_expires_in:48h}`
-- **Token 字段**: `token` (dt-, 30d), `device_token`, `refresh_token` (drt-, 1y), `expires_at`, `expires_in`(ms)
-- **首次登录新人福利** (官方桌面客户端登录事件触发，服务端发放):
-  - 14 天 Pro 试用 + 300 Credits（无客户端激活端点；登录事件本身即是触发器）
-  - v0.8.45 起插件对所有 Intl 登录均使用官方桌面客户端协议 → 服务端会自动发放该福利
+### OAuth 流程（PKCE device authorization）
+
+- **参考版本**：`cpa-workbuddy-plugin` 的 `qoder-ai/oauth.go`，提交 `806c61f`；本仓两个授权入口共用 `plugins/qoder/oauth.go:startLoginWithRegion`。
+- **登录入口**：`GET https://qoder.com/device/selectAccounts?challenge={challenge}&challenge_method=S256&nonce={nonce}&machine_id={machine_id}&client_id={client_id}&redirect_uri={redirect_uri}`，直接打开，不包装 `/users/sign-in`。
+- **client_id**：`1c5e33e1-364d-4ce6-b02c-acaa81274a5c`。
+- **redirect_uri**：`qoder-work://`。
+- **nonce / machine_id**：分别生成带连字符的随机 UUID；授权开始不调用本机 runtime-info、不下载身份桥、不申请 UMID。
+- **PKCE**：64 字符 verifier，仅保留在本次登录状态中；URL 携带 SHA-256 / Base64URL challenge，`challenge_method=S256`。
+- **Token 轮询**：`GET https://openapi.qoder.sh/api/v1/deviceToken/poll?nonce={nonce}&verifier={verifier}&challenge_method=S256`，`User-Agent: Qoder AI`；HTTP 404/202 或无 token 的响应为 pending。
+- **Token 刷新**：`POST https://openapi.qoder.sh/api/v1/deviceToken/refresh`，body `{refresh_token:"drt-..."}`；设备凭据和 PAT 凭据维持各自刷新链路。
+- **刷新返回解析**：主动保活与宿主刷新共用设备返回校验和到期解析；AT 接受 `token` / `device_token`，RT 必须完整；`expires_in` 按毫秒解析，缺失时读取 RFC3339 `expires_at`。不凭 AT 字段名称推断凭据类型，不完整的设备返回不落盘。
+- **PAT → jobToken**：`POST https://openapi.qoder.sh/api/v1/jobToken/exchange`，body `{personal_token:"pt-..."}`，返回 jt-/jrt-。
+- **登录落盘**：成功后立即返回 dt-/drt- 和 poll 中的 user_id，不等待用户信息或活动查询；返回的 AuthData.ID 留空，由宿主按文件路径注册，文件名仍为 `qoder-intl-<uid>.json`。账号列表出现其他新文件不能完成本次授权。
+- **兼容边界**：保留地区选择、合并插件标识和 `login_dialect` 配置的读写；`login_dialect` 仍不切换授权协议。现有凭据不迁移、不重写，活动资格由上游判定。
 
 ### Chat API (COSY-signed)
 - **URL**: `POST https://api3.qoder.sh/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1`
@@ -239,36 +236,36 @@
 ### 配额查询
 - `GET https://openapi.qoder.sh/api/v2/quota/usage`
 
-### 签到
-- **无 legacy 端点**；每日权益以 campaign 形式下发（v0.8.18 起）：
-  - **列表**: `GET https://openapi.qoder.sh/sash/api/v1/me/campaigns?forceRefresh=true`
-    - `campaigns[]` 中 `actionType=CLAIM_BENEFIT` 且 `claimStatus=CLAIMABLE` 的行为可领取项
-  - **领取**: `POST https://openapi.qoder.sh/sash/api/v1/me/campaigns/{campaignId}/claim` (body `{}`)
-    - 返回 `{status:"CLAIMED", replayed, benefit:{kind,amount}, expiresAt}`；`replayed=true` = 幂等重放（今日已领）
+### 签到与活动身份
+
+- **列表**：`GET https://openapi.qoder.sh/sash/api/v1/me/campaigns`，无额外 query；返回空列表时不切换到本机指纹或无指纹请求重试。
+- **领取**：`POST https://openapi.qoder.sh/sash/api/v1/me/campaigns/{campaignId}/claim`，body `{}`。
+- 两者共用 `campaign_identity.go:internationalCampaignHeaders`：Bearer、Accept / Content-Type `application/json`、User-Agent `Qoder`、Cosy-ClientType `10`、Cosy-Version `0.4.3`，以及完整六个 Cosy-Machine* 头，不走 Cookie bootstrap。
+- **UMID Owner**：`umid.go`；账号键优先 UID、缺失时使用 AT 摘要，初始种子 `<key>#0`，账号间缓存隔离、有效期 12 小时；同一账号的申请与轮换串行。按参考协议申请令牌，再以 eeid 派生 machineType / machineCode；machineId 为种子的 DNS UUIDv5，主机名随账号种子派生，MachineOS 为 `x86_64_linux`。
+- **UMID 申请**：HTTP POST `us-pum.alibabachengdun.com/repPc.json?e=1000&pn=runtime-info-linux&os=8&sv=1.5.0&pv=NA&pt=1`，8 秒超时，不携带 AT、RT 或 Cookie。`umid_codec.go` / `umid_crypto.go` 从参考项目移植报文、AES-CBC 与 XXH64 算法。
+- **可领取范围**：保留多活动领取，积分优先；仅处理本账号本次列表中 ID 非空、`actionType=CLAIM_BENEFIT`、`claimStatus=CLAIMABLE` 且仍在有效期内的行。`VIEW_DETAILS`、缺失 actionType、历史/其他账号记忆的轮次和配置种子都不触发国际版领取。列表不再写入隐藏轮次记忆；CN 原有探测与兼容行为保留。
+- **限定重试**：只有 HTTP 成功响应中的 `SAME_PERSON_ALREADY_CLAIMED` 拒绝才触发该账号 UMID 盐值递增（`<key>#1`、`<key>#2`）并重新申请身份，每个活动总计最多三次领取请求。网络超时、HTTP 401/429/5xx、其他拒绝和已领取/幂等重放不触发轮换或额外领取。每次重试重新核对活动时间窗口，最终以官方响应为准。
+- **身份失败**：首次获取或轮换失败立即结束对应请求，不用旧身份继续重试，也不降级为无指纹请求。统一提示“活动身份获取失败，暂时无法查询或领取积分，请稍后重试。”，不改变已保存的 OAuth 凭据；轮换失败保留上一份完整缓存。底层原因保留在错误链中，不拼入用户提示。这是与参考实现吞掉身份错误后继续请求的有意差异。
+- **领取结果**：身份、网络、HTTP 和解析失败保持请求失败，不归类为资格不足；若同批其他活动已发奖，则保留积分、全部兑换码及 `partial=true` / `claim_errors`，不丢弃已发放奖励。兑换码待发放也保留领取成功状态，不冒充积分奖励。
+- **手动接口与面板**：`/checkin` 的汇总将 `success`、`partial`、`already`、`skipped`、`fail` 分开计数；只有实际已领取状态计入 `already`，无活动、资格不足或同人拒绝计入 `skipped`。`redemption_codes` 数组贯穿单账号和批量结果，含兑换码的提示不设自动消失计时，并提供关闭按钮；部分成功保留重试入口。国际版能力与按钮状态依据结构化结果判断，不从提示文案中的“国际版”等字样推断。
+- 本轮完成静态调用链和源码对照，已编写局部回归用例；未运行测试、构建、客户端或真实新账号授权，不能据此保证活动资格。
 
 ---
 
 ## Provider: qoder-cn (Qoder CN)
 
-### OAuth 流程 (device authorization, 官方桌面客户端 v0.4.3 同源)
-- **登录入口** (Nft wrapper): `GET https://qoder.cn/users/sign-in?biz_variant=qoder&oauth_callback=<encoded Sft URL>`
-- **Sft 内层 URL**: `GET https://qoder.cn/device/selectAccounts?challenge={challenge}&challenge_method=S256&nonce={nonce}&machine_id={machine_id}&client_id={client_id}`
-  - CN 的 redirect_uri 为空（`authRedirectUris.stable = null`），按 Sft 的 `...t.redirectUri?{redirect_uri:t.redirectUri}:{}` 逻辑从 URL 中**省略**
-- **client_id**: `732aef47-9cf2-46a2-95fe-4cebb5d0d1fa` (官方桌面客户端 v0.4.3，CN 与 Intl 共用；v0.8.45 起统一)
-- **redirect_uri**: 空（omitted）
-- **machine_id**: 同 Intl（`machine_identity.go` 注入，umid 二进制 + 模拟身份回退）
-- **biz_variant**: `qoder` (用于 Nft wrapper)
-- **authBaseUrl**: `https://qoder.cn` (NOT `qoder.com.cn` —— 后者是 legacy qoderwork IDE 域名，v0.4.x 桌面客户端已切换到 `qoder.cn`)
-- **openApiBaseUrl**: `https://openapi.qoder.com.cn` (用于 poll / refresh / userinfo / campaigns / quota)
-- **Token 轮询**: `GET https://openapi.qoder.com.cn/api/v1/deviceToken/poll?...`
-- **Token 刷新**: `POST https://openapi.qoder.com.cn/api/v1/deviceToken/refresh`
-  - body: `{refresh_token:"drt-..."}`
-- **PAT 导入**: `POST https://openapi.qoder.com.cn/api/v1/jobToken/exchange`
-- **Token 字段**: `token` (dt-, 30d), `device_token`, `refresh_token` (drt-, 1y), `expires_at`, `expires_in`(ms)
-- **首次登录新人福利** (官方桌面客户端登录事件触发，服务端发放):
-  - 14 天 Pro 试用 + 300 Credits（无客户端激活端点；登录事件本身即是触发器）
-  - v0.8.45 之前插件用 legacy qoderwork IDE 协议登录 CN（client_id `1c5e33e1-...` + redirect_uri `qoder-work-cn://` + 无 biz_variant wrapper），服务端从未触发该福利——这是「qoder cn/init 无法签到也无法领取首登录奖励」的根因
-  - v0.8.45 起插件对所有 CN 登录均使用官方桌面客户端协议 → 服务端会自动发放该福利
+### OAuth 流程（PKCE device authorization）
+
+- **参考版本**：`cpa-workbuddy-plugin/qoderwork/oauth.go`，提交 `806c61f`。
+- **登录入口**：`GET https://qoder.com.cn/device/selectAccounts?challenge={challenge}&challenge_method=S256&nonce={nonce}&machine_id={machine_id}&client_id={client_id}&redirect_uri={redirect_uri}`，不包装 `/users/sign-in`。
+- **client_id**：`1c5e33e1-364d-4ce6-b02c-acaa81274a5c`。
+- **redirect_uri**：`qoder-work-cn://`，作为 URL 参数显式携带。
+- **nonce / machine_id / PKCE**：同 Intl 的随机 UUID 和 S256 实现，授权过程不获取本机活动指纹。
+- **Token 轮询**：`GET https://openapi.qoder.com.cn/api/v1/deviceToken/poll?...`，`User-Agent: QoderWork`。
+- **Token 刷新**：`POST https://openapi.qoder.com.cn/api/v1/deviceToken/refresh`，body `{refresh_token:"drt-..."}`。
+- **PAT 导入**：`POST https://openapi.qoder.com.cn/api/v1/jobToken/exchange`。
+- **Token 字段**：`token` / `device_token`、`refresh_token`、`expires_at`、`expires_in`（毫秒）。登录成功即时返回，账号文件仍按 `qoder-cn-<uid>.json` 落盘。
+- 本轮只对齐 CN 授权链路，保留本仓 CN 原有活动、Cookie 与 native/derived 身份处理；国际版 UMID 不接入 CN。
 
 ### Chat API
 - **URL**: `POST https://gateway.qoder.com.cn/algo/api/v2/service/pro/sse/agent_chat_generation?FetchKeys=llm_model_result&AgentId=agent_common&Encode=1`

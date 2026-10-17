@@ -159,7 +159,7 @@ func TestProbeLatchPerRound(t *testing.T) {
 	}
 
 	claimHits := 0
-	newBillingServer(t, "intl", map[string]func(r *http.Request) (int, string){
+	newBillingServer(t, "cn", map[string]func(r *http.Request) (int, string){
 		"/sash/api/v1/me/campaigns": func(r *http.Request) (int, string) {
 			return http.StatusOK, `{"showCampaign":true,"campaigns":[]}`
 		},
@@ -168,14 +168,14 @@ func TestProbeLatchPerRound(t *testing.T) {
 			return http.StatusOK, `{"status":"CLAIMED","benefit":{"kind":"CREDITS","amount":100}}`
 		},
 	})
-	sa := &storedAuth{Auth: storedTokens{AccessToken: "dt-intl-test", Region: "intl"}, Account: storedAccount{UID: "u673e7fcc"}}
+	sa := &storedAuth{Auth: storedTokens{AccessToken: "dt-cn-fixture", Region: "cn"}, Account: storedAccount{UID: "fixture-probe"}}
 
 	prevLast := roundProbeLast
 	t.Cleanup(func() { roundProbeLast = prevLast })
 	roundProbeLast = map[string]roundProbeLatch{}
 	// A sibling claim already answered for the OLD round an hour ago (6h
 	// latch fresh).
-	roundProbeLast["intl:u673e7fcc:camp-old-round"] = roundProbeLatch{At: time.Now().Add(-time.Hour), TTL: roundProbeCooldown}
+	roundProbeLast["cn:fixture-probe:camp-old-round"] = roundProbeLatch{At: time.Now().Add(-time.Hour), TTL: roundProbeCooldown}
 
 	// The list hid the old round and a NEW round id was seen this morning —
 	// the old latch must not block the new round's probe.
@@ -184,7 +184,7 @@ func TestProbeLatchPerRound(t *testing.T) {
 		ActionType: "CLAIM_BENEFIT", ClaimStatus: "CLAIMABLE",
 		Benefit: &campaignBen{Kind: "CREDITS", Amount: 100},
 	}}}
-	rememberCampaignRound("intl", "u673e7fcc", status)
+	rememberCampaignRound("cn", "fixture-probe", status)
 
 	res, note := probeHiddenRound(sa)
 	if claimHits != 1 {
@@ -324,7 +324,7 @@ func TestClaimedCampaignEmptyActionType(t *testing.T) {
 		{CampaignID: "c-view", CampaignKey: "act-20260901-922", ActionType: "VIEW_DETAILS", ClaimStatus: "CLAIMABLE"},
 		{CampaignID: "c-daily", CampaignKey: "act-20260930-295", ActionType: "", ClaimStatus: "CLAIMED", Benefit: &campaignBen{Kind: "CREDITS", Amount: 100}},
 	}}
-	if got := claimedCampaign(claimed); got == nil || got.CampaignID != "c-daily" {
+	if got := claimedCampaign(claimed, regionCN); got == nil || got.CampaignID != "c-daily" {
 		t.Fatalf("claimedCampaign = %+v, want c-daily (empty actionType + credits)", got)
 	}
 
@@ -333,7 +333,7 @@ func TestClaimedCampaignEmptyActionType(t *testing.T) {
 	coupon := &campaignStatusResponse{Campaigns: []campaign{
 		{CampaignID: "c-coupon", ActionType: "", ClaimStatus: "CLAIMED", Benefit: &campaignBen{Kind: "REDEMPTION_CODE"}},
 	}}
-	if got := claimedCampaign(coupon); got != nil {
+	if got := claimedCampaign(coupon, regionCN); got != nil {
 		t.Fatalf("claimedCampaign must skip redemption-shaped rows, got %+v", got)
 	}
 
@@ -341,7 +341,7 @@ func TestClaimedCampaignEmptyActionType(t *testing.T) {
 	explicit := &campaignStatusResponse{Campaigns: []campaign{
 		{CampaignID: "c-x", ActionType: "CLAIM_BENEFIT", ClaimStatus: "CLAIMED"},
 	}}
-	if got := claimedCampaign(explicit); got == nil || got.CampaignID != "c-x" {
+	if got := claimedCampaign(explicit, regionCN); got == nil || got.CampaignID != "c-x" {
 		t.Fatalf("claimedCampaign lost the CLAIM_BENEFIT match, got %+v", got)
 	}
 }

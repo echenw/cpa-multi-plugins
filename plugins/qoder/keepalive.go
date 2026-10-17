@@ -138,27 +138,32 @@ func refreshOneAuth(authIndex, authID string) (string, error) {
 		return "failed", fmt.Errorf("refresh rejected (HTTP %d): %s", status, truncateRedacted(err.Error(), 120))
 	}
 
-	// Parse both response shapes: jobToken refresh returns {"token":...},
-	// deviceToken refresh returns {"device_token":...} (or "token") plus an
-	// RFC3339 expires_at instead of expires_in.
-	var tok jobTokenResponse
-	_ = json.Unmarshal(data, &tok)
-	expiry := time.Now().Add(time.Duration(tok.ExpiresIn) * time.Millisecond).Unix()
-	if tok.Token == "" {
-		var dt deviceTokenResponse
-		_ = json.Unmarshal(data, &dt)
-		tok.Token = dt.accessToken()
-		tok.RefreshToken = dt.RefreshToken
-		expiry = deviceExpiryUnix(&dt)
-	}
-	if tok.Token == "" {
-		return "failed", fmt.Errorf("refresh_failed: no token in response (raw=%s)", truncateRedacted(string(data), 200))
-	}
-	sa.Auth.AccessToken = tok.Token
-	if tok.RefreshToken != "" {
+	// Route by the stored credential family: a device response may use
+	// either token spelling and only expires_at. Never infer its family
+	// from whether the shared "token" JSON field happened to be present.
+	if strings.HasPrefix(sa.Auth.RefreshToken, "drt-") {
+		tok, err := parseDeviceTokenRefresh(data)
+		if err != nil {
+			return "failed", err
+		}
+		sa.Auth.AccessToken = tok.accessToken()
 		sa.Auth.RefreshToken = tok.RefreshToken
+		sa.Auth.ExpiresAt = preserveExpiry(deviceExpiryUnix(tok), sa.Auth.ExpiresAt)
+	} else {
+		var tok jobTokenResponse
+		if err := json.Unmarshal(data, &tok); err != nil {
+			return "failed", fmt.Errorf("jobToken refresh parse: %w", err)
+		}
+		if tok.Token == "" {
+			return "failed", fmt.Errorf("jobToken refresh: empty token in response")
+		}
+		sa.Auth.AccessToken = tok.Token
+		if tok.RefreshToken != "" {
+			sa.Auth.RefreshToken = tok.RefreshToken
+		}
+		expiry := time.Now().Add(time.Duration(tok.ExpiresIn) * time.Millisecond).Unix()
+		sa.Auth.ExpiresAt = preserveExpiry(expiry, sa.Auth.ExpiresAt)
 	}
-	sa.Auth.ExpiresAt = preserveExpiry(expiry, sa.Auth.ExpiresAt)
 	if err := persistAuthTokens(authIndex, sa); err != nil {
 		return "error", fmt.Errorf("persist: %w", err)
 	}
@@ -181,7 +186,7 @@ func refreshOneAuth(authIndex, authID string) (string, error) {
 // could only approximate that by carrying fields back by hand and would
 // silently drop whatever the next release forgets to list.
 func persistAuthTokens(authIndex string, sa *storedAuth) error {
-	phys, err := hostAuthGetPhysical(authIndex)
+	phys, err := hostAuthGetPhysicalFn(authIndex)
 	if err != nil {
 		return err
 	}
@@ -193,7 +198,7 @@ func persistAuthTokens(authIndex string, sa *storedAuth) error {
 	if err != nil {
 		return err
 	}
-	return hostAuthSaveJSON(name, raw)
+	return hostAuthSaveJSONFn(name, raw)
 }
 
 // markSessionDead flags an auth disabled via the host's standard `disabled`

@@ -46,7 +46,7 @@ func TestClaimableCampaignSelection(t *testing.T) {
 			{CampaignID: "c-other", ActionType: "SURVEY", ClaimStatus: "CLAIMABLE", Benefit: &campaignBen{Kind: "CREDITS", Amount: 999}},
 		},
 	}
-	got := claimableCampaign(status)
+	got := claimableCampaign(status, regionIntl)
 	if got == nil {
 		t.Fatal("claimable campaign not found")
 	}
@@ -56,12 +56,12 @@ func TestClaimableCampaignSelection(t *testing.T) {
 	if amount := campaignCredit(got); amount != 100 {
 		t.Fatalf("credit = %d, want 100", amount)
 	}
-	if claimed := claimedCampaign(status); claimed == nil || claimed.CampaignID != "c-done" {
+	if claimed := claimedCampaign(status, regionIntl); claimed == nil || claimed.CampaignID != "c-done" {
 		t.Fatalf("claimed detection failed: %+v", claimed)
 	}
 	// Non-CREDITS benefits count as zero credit but remain claimable.
 	status.Campaigns = []campaign{{CampaignID: "c-disc", ActionType: "CLAIM_BENEFIT", ClaimStatus: "CLAIMABLE", Benefit: &campaignBen{Kind: "DISCOUNT", Amount: 5}}}
-	if c := claimableCampaign(status); c == nil {
+	if c := claimableCampaign(status, regionIntl); c == nil {
 		t.Fatal("non-credit benefit must still be claimable")
 	} else if amount := campaignCredit(c); amount != 0 {
 		t.Fatalf("non-credit amount = %d, want 0", amount)
@@ -73,7 +73,7 @@ func TestCampaignCheckinSummaryMapping(t *testing.T) {
 	sum := campaignCheckinSummary(&campaignStatusResponse{
 		ShowCampaign: true,
 		Campaigns:    []campaign{{CampaignID: "c1", ActionType: "CLAIM_BENEFIT", ClaimStatus: "CLAIMABLE", Benefit: &campaignBen{Kind: "CREDITS", Amount: 100}}},
-	})
+	}, regionIntl)
 	if !sum.Active || sum.TodayCheckedIn || sum.DailyCredit != 100 {
 		t.Fatalf("claimable summary = %+v", sum)
 	}
@@ -81,13 +81,13 @@ func TestCampaignCheckinSummaryMapping(t *testing.T) {
 	sum = campaignCheckinSummary(&campaignStatusResponse{
 		ShowCampaign: true,
 		Campaigns:    []campaign{{CampaignID: "c1", ActionType: "CLAIM_BENEFIT", ClaimStatus: "CLAIMED", Benefit: &campaignBen{Kind: "CREDITS", Amount: 100}}},
-	})
+	}, regionIntl)
 	if !sum.Active || !sum.TodayCheckedIn || sum.TodayCredit != 100 {
 		t.Fatalf("claimed summary = %+v", sum)
 	}
 	// Claimed campaigns vanish from the list entirely — an inactive summary is
 	// a normal end-of-day state (reason=none upstream), never an error path.
-	sum = campaignCheckinSummary(&campaignStatusResponse{})
+	sum = campaignCheckinSummary(&campaignStatusResponse{}, regionIntl)
 	if sum.Active {
 		t.Fatal("empty campaign list must not report active")
 	}
@@ -103,7 +103,7 @@ func TestCheckinSummaryShapesStayCompatible(t *testing.T) {
 	intl := campaignCheckinSummary(&campaignStatusResponse{
 		ShowCampaign: true,
 		Campaigns:    []campaign{{CampaignID: "c1", ActionType: "CLAIM_BENEFIT", ClaimStatus: "CLAIMABLE", Benefit: &campaignBen{Kind: "CREDITS", Amount: 30}}},
-	})
+	}, regionIntl)
 	if cn.ActivityName == "" {
 		t.Fatal("CN summary must carry a display name")
 	}

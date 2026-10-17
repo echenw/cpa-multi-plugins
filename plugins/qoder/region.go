@@ -39,18 +39,9 @@ func regionDisplayName(region string) string {
 }
 
 var (
-	// v0.8.45 (deprecated): login_dialect was a v0.8.40 Intl-only opt-in
-	// that selected between "cockpit" (legacy no-client_id/machine_id entry)
-	// and "desktop" (official desktop-client flow). Both CN and Intl now
-	// always build the official desktop-client URL, so the dialect has no
-	// effect anymore. The config key is still parsed (usage_config.go) and
-	// the getter still returns the stored value, but startLoginWithRegion
-	// no longer reads it. Kept for backward compatibility with existing
-	// config_yaml deployments — removing it would break their `configure()`
-	// round-trip. The legacy constants qoderDesktopClientIDIntl /
-	// qoderDesktopRedirectURIIntl were removed from oauth.go for the same
-	// reason — both regions now use qoderDesktopClientID and the per-region
-	// qoderRedirectURI* (empty for CN, qoder-app:// for Intl).
+	// Deprecated configuration retained for existing configure() round-trips.
+	// Login always uses the reference device flow for the requested region;
+	// this value never selects a second authorization path.
 	loginDialectMu sync.RWMutex
 	loginDialect   = ""
 )

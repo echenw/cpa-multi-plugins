@@ -48,6 +48,12 @@ only and changes no license conclusion.
 7. luode0320/cpa-workbuddy-plugin (MIT, port source)
    Port source for the token-usage-tracker plugin and for the
    usage-feed mechanism (NDJSON feed, rotation semantics).
+   The Qoder authorization constants and international UMID protocol
+   (plugins/qoder/umid.go, umid_codec.go, umid_crypto.go) are adapted
+   from its qoderwork/qoder-ai modules at 806c61f.
+   qoder-ai/LICENSE contains the MIT license; its
+   Sliverkiss copyright is retained in the ported files and
+   plugins/qoder/LICENSE.
    Its token-usage-tracker/ subtree carries no LICENSE file and
    no license marker was found in its files or history at the
    time of writing: 「许可未证实—不可公开分发」. The tracker

@@ -160,7 +160,7 @@ func TestCheckinWithWindowRetryErrorReturnsImmediately(t *testing.T) {
 }
 
 // 窗口分支文案：开窗后的「无行」是可见性滞后，不是上游受众/风控。
-// 10:31（窗口外）恢复原身份分叉（测试环境无桥 → derived 模拟身份文案）。
+// CN 在窗口外保留 native/derived 提示；Intl 始终使用 UMID 提示。
 func TestCampaignIdleDiagnosisWindowLag(t *testing.T) {
 	status := &campaignStatusResponse{
 		ShowCampaign: true,
@@ -183,17 +183,20 @@ func TestCampaignIdleDiagnosisWindowLag(t *testing.T) {
 		t.Fatalf("in-window diagnosis must not render the identity fork: %q", msg)
 	}
 
-	// 窗口外（北京 10:31）→ 原身份分叉：测试环境（QD_UMID_AUTO=0，无桥）
-	// machineIdentityFor 为 derived，走「官方格式模拟身份」文案。
+	// 窗口外（北京 10:31）：Intl 不再建议 native/derived 身份。
 	dailyWindowNow = func() time.Time { return bjTime(10, 31) }
 	msg = campaignIdleDiagnosis(status, intlAuth())
 	if strings.Contains(msg, "可见性有数分钟滞后") {
 		t.Fatalf("out-of-window diagnosis must not use the lag wording: %q", msg)
 	}
-	if !strings.Contains(msg, "官方格式模拟身份") {
-		t.Fatalf("out-of-window diagnosis must fall back to the identity fork: %q", msg)
+	if !strings.Contains(msg, "UMID") || !strings.Contains(msg, "活动接口当前未返回每日领取行") {
+		t.Fatalf("Intl diagnosis must use its current UMID contract: %q", msg)
 	}
-	if !strings.Contains(msg, "每日 100 积分行未出现") {
-		t.Fatalf("out-of-window diagnosis missing the identity-fork lead: %q", msg)
+	previousIdentity := machineIdentityOverride
+	machineIdentityOverride = &machineIdentity{Source: "derived"}
+	t.Cleanup(func() { machineIdentityOverride = previousIdentity })
+	msg = campaignIdleDiagnosis(status, cnAuth())
+	if !strings.Contains(msg, "官方格式模拟身份") || !strings.Contains(msg, "每日 100 积分行未出现") {
+		t.Fatalf("CN must retain its identity diagnosis: %q", msg)
 	}
 }

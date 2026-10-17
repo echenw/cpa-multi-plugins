@@ -43,7 +43,7 @@ func billingBaseFor(sa *storedAuth) string {
 // pointless risk variable.
 const (
 	billingClientType = "10"
-	billingClientVer  = "0.4.3"
+	billingClientVer  = qoderClientVer
 )
 
 // billingHeaders sets the shared billing auth + identity headers.

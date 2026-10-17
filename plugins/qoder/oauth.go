@@ -1,19 +1,6 @@
-// oauth.go implements QoderWork's auth flows. Two entry points, one outcome:
-//
-//  1. PAT import (management panel): user pastes a PAT (`pt-...`) created on
-//     qoder.com.cn; the plugin exchanges it for a jobToken pair (jt-/jrt-)
-//     and stores both.
-//
-//  2. OAuth-like flow (AuthProvider.StartLogin): QoderWork has no real
-//     OAuth authorization-code flow — its web login is Aliyun SSO SMS →
-//     web session cookie → manual PAT creation. So handleStartLogin returns
-//     the PAT-creation page URL; the user creates a PAT in their browser
-//     and pastes it back. handlePollLogin accepts the pasted PAT and runs
-//     the same exchange as path 1.
-//
-// Refresh uses jrt- (48h TTL) to get a fresh jt- (24h TTL). When jrt-
-// expires, the underlying PAT is still valid — we fall back to a fresh
-// exchange using the stored PAT.
+// oauth.go implements region-pinned PKCE device authorization and PAT import.
+// Login parameters follow cpa-workbuddy-plugin/qoderwork (CN) and qoder-ai
+// (Intl); device grants use dt-/drt-, while PAT grants use jt-/jrt-.
 package main
 
 import (
@@ -189,70 +176,16 @@ func uiUserType(ui *userInfoResponse) string {
 	return ui.UserType
 }
 
-// -----------------------------------------------------------------------------
-// Device-authorization login (real OAuth — no PAT required)
-//
-// v0.8.45 (official desktop client v0.4.3 asar forensics, BOTH regions):
-// the legacy qoderwork IDE-plugin constants (client_id 1c5e33e1-... for CN,
-// e883ade2-... for Intl, qoder-work-cn:// / qoder://aicoding... redirects,
-// qoder.com.cn auth host) were reverse-engineered from the OLD qoderwork
-// IDE plugin, NOT the official desktop client. Both the CN asar
-// (asar-cn/out/main/index.js, Vpe config block) and the Intl asar
-// (asar-intl/out/main/index.js, same Vpe shape) reveal the official desktop
-// client uses ONE unified protocol:
-//
-//      client_id         = 732aef47-9cf2-46a2-95fe-4cebb5d0d1fa  (shared CN+Intl)
-//      authBizVariant    = "qoder"  (wraps selectAccounts in /users/sign-in)
-//      authBaseUrl (CN)  = https://qoder.cn         (NOT qoder.com.cn)
-//      authBaseUrl (Intl) = https://qoder.com
-//      redirect_uri (CN)  = null  → OMITTED from the URL
-//      redirect_uri (Intl)= "qoder-app://"
-//      openApiBaseUrl (CN)  = https://openapi.qoder.com.cn  (poll/refresh/userinfo)
-//      openApiBaseUrl (Intl)= https://openapi.qoder.sh
-//
-// The official newbie grant (first desktop-client login → 14-day Pro trial
-// + 300 credits) is evaluated SERVER-SIDE on that login event, so presenting
-// AS the official desktop client is the ONLY plugin-side channel that
-// triggers it. The legacy qoderwork IDE login never fires the grant — which
-// is the root cause of "qoder cn/init 无法签到也无法领取首登录奖励"
-// (field report 2026-10-02): the account logs in, but the campaigns
-// surface never shows the daily 100-credits / Pro pack rows that the newbie
-// grant would have unlocked, so check-in reports "今日暂无可领取权益"
-// forever.
-//
-// v0.8.45 therefore retires the v0.8.40 Intl-only "desktop dialect" opt-in:
-// both CN and Intl now always build the official desktop-client URL. The
-// `login_dialect` config key is kept as a deprecated no-op for backward
-// compatibility — both "cockpit" and "desktop" values produce the same
-// desktop URL now.
-// -----------------------------------------------------------------------------
-
+// Device-authorization constants match cpa-workbuddy-plugin (806c61f).
+// Authorization has its own random nonce/machine ID; UMID is resolved later
+// for international campaign requests, never while starting a login.
 const (
-	// qoderDesktopClientID is the single client_id both the CN (qoder.cn)
-	// and Intl (qoder.com) desktop clients v0.4.3 send on /device/selectAccounts.
-	// Verified byte-identical in asar-cn/out/main/index.js and
-	// asar-intl/out/main/index.js (Vpe.authClientIds.prod).
-	qoderDesktopClientID = "732aef47-9cf2-46a2-95fe-4cebb5d0d1fa"
-
-	// CN desktop client v0.4.3 (asar-cn Vpe + environments.prod):
-	//   authBaseUrl  = https://qoder.cn        (NOT qoder.com.cn — that's the
-	//                                            legacy qoderwork IDE domain)
-	//   redirect_uri = null                    (omitted from the URL — the
-	//                                            Sft builder's
-	//                                            `...t.redirectUri?{redirect_uri:t.redirectUri}:{}`
-	//                                            drops the param when null)
-	//   biz_variant  = "qoder"                 (wraps the URL in /users/sign-in)
-	qoderWebsiteCN     = "https://qoder.cn"
-	qoderClientIDCN    = qoderDesktopClientID
-	qoderRedirectURICN = "" // empty → omitted from selectAccounts URL
-
-	// Intl desktop client v0.4.3 (asar-intl Vpe + environments.prod):
-	//   authBaseUrl  = https://qoder.com
-	//   redirect_uri = "qoder-app://"         (stable channel)
-	//   biz_variant  = "qoder"
+	qoderWebsiteCN       = "https://qoder.com.cn"
+	qoderClientIDCN      = "1c5e33e1-364d-4ce6-b02c-acaa81274a5c"
+	qoderRedirectURICN   = "qoder-work-cn://"
 	qoderWebsiteIntl     = "https://qoder.com"
-	qoderClientIDIntl    = qoderDesktopClientID
-	qoderRedirectURIIntl = "qoder-app://"
+	qoderClientIDIntl    = qoderClientIDCN
+	qoderRedirectURIIntl = "qoder-work://"
 )
 
 // deviceTokenResponse mirrors /api/v1/deviceToken/{poll,refresh} payloads.
@@ -307,56 +240,18 @@ func handleStartLogin(raw []byte) ([]byte, error) {
 	return startLoginWithRegion(raw, region)
 }
 
-// startLoginWithRegion starts a device-flow login pinned to region. The host
-// RPC entry (handleStartLogin) takes the request-carried region (default
-// intl); there is no config-file fallback.
-//
-// v0.8.45 (official desktop client v0.4.3 asar forensics): both CN and Intl
-// now build the official desktop-client URL byte-for-byte (asar functions
-// Sft + Nft): /device/selectAccounts?challenge=&challenge_method=S256&nonce=
-// &machine_id=&client_id=732aef47-...[&redirect_uri=] then wrapped in
-// /users/sign-in?biz_variant=qoder&oauth_callback=<encoded inner URL>. The
-// machine_id is the real machine fingerprint (machineIdentityFor), not a
-// random uuid — the official client sends its real machine identity, and
-// the campaigns surface gates device-targeted rows on that identity.
-//
-// CN specifics: redirect_uri is EMPTY → omitted from the inner URL (the
-// official CN desktop client's authRedirectUris.stable is null). Intl
-// specifics: redirect_uri = "qoder-app://".
-//
-// The v0.8.40 Intl-only `login_dialect` opt-in is now a deprecated no-op:
-// both "cockpit" and "desktop" values produce the same desktop URL. The
-// config key is kept for backward compatibility with existing deployments.
+// startLoginWithRegion starts the reference device flow in the requested
+// region. The management panel and host RPC share this single entry point.
+// login_dialect remains a deprecated configuration no-op.
 func startLoginWithRegion(raw []byte, region string) ([]byte, error) {
-	// Only cn/intl route; anything else is an explicit rejection (this
-	// path never writes config).
 	if region != regionCN && region != regionIntl {
 		return nil, fmt.Errorf("invalid login region %q: want \"cn\" or \"intl\" (default \"intl\"); current selection unchanged", region)
 	}
 	verifier, challenge := makePKCE()
-	// nonce: intl protocol (cockpit-tools v1.3.36, aligned 2026-09-02)
-	// uses 32-hex uuid-simple; CN (cpa-plugin qoderwork reference) keeps
-	// the dashed uuid. The upstream /api/v1/deviceToken/poll accepts both
-	// forms — the format split is preserved purely for backward compat with
-	// existing captured traffic, not a hard upstream requirement.
 	nonce := uuid.NewString()
-	if region == regionIntl {
-		nonce = strings.ReplaceAll(nonce, "-", "")
-	}
-	// v0.8.45: the official desktop client sends its REAL machine fingerprint
-	// (machineIdentityFor → native umid bridge or per-uid simulated identity
-	// matching the official bridge's output shape). A random uuid here is
-	// exactly what the campaigns surface filters device-targeted rows on —
-	// the daily 100-credits and Pro pack rows disappear for derived/random
-	// identities. machineIdentityFor falls back to a per-uid simulated
-	// identity when the official umid binary is not installed.
-	machineID := machineIdentityFor(region, "", false).MachineID
-	prompt := "在打开的页面中登录并授权（官方桌面客户端同源设备授权，无需 PAT）。授权完成后浏览器可能提示打开 Qoder 桌面应用——属正常现象，插件会自动完成轮询登录。"
+	machineID := uuid.NewString()
+	prompt := "在打开的页面中登录并授权 Qoder（设备授权，无需 PAT）。授权完成后插件会自动完成轮询登录。"
 
-	// Sft — /device/selectAccounts with PKCE + machine identity + client_id.
-	// CN: redirect_uri is empty (the official desktop client omits it); Intl
-	// carries qoder-app://. The check mirrors the asar's
-	// `...t.redirectUri?{redirect_uri:t.redirectUri}:{}`.
 	q := url.Values{}
 	q.Set("challenge", challenge)
 	q.Set("challenge_method", "S256")
@@ -366,16 +261,11 @@ func startLoginWithRegion(raw []byte, region string) ([]byte, error) {
 	if r := qoderRedirectURIFor(region); r != "" {
 		q.Set("redirect_uri", r)
 	}
-	innerURL := qoderWebsiteFor(region) + "/device/selectAccounts?" + q.Encode()
-
-	// Nft — wrap the selectAccounts URL in the sign-in page
-	// (biz_variant=qoder). The official client always wraps unless
-	// QODER_AUTH_DIRECT_DEVICE_FLOW=1 is set; we always wrap.
-	authURL := qoderWebsiteFor(region) + "/users/sign-in?biz_variant=qoder&oauth_callback=" + url.QueryEscape(innerURL)
+	authURL := qoderWebsiteFor(region) + "/device/selectAccounts?" + q.Encode()
 
 	now := time.Now()
 	state := fmt.Sprintf("qw-%d", now.UnixNano())
-	loginStates.Store(state, &loginCtx{verifier: verifier, nonce: nonce, region: region, expires: now.Add(loginTTL), startedAt: now.UnixNano()})
+	loginStates.Store(state, &loginCtx{verifier: verifier, nonce: nonce, region: region, expires: now.Add(loginTTL)})
 	return okEnvelope(pluginapi.AuthLoginStartResponse{
 		Provider:  providerName,
 		URL:       authURL,
@@ -592,7 +482,11 @@ func pollDeviceToken(nonce, verifier, region string) (*deviceTokenResponse, bool
 		return nil, false, err
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "QoderWork")
+	if region == regionIntl {
+		req.Header.Set("User-Agent", "Qoder AI")
+	} else {
+		req.Header.Set("User-Agent", "QoderWork")
+	}
 	resp, err := sharedHTTPClient().Do(req)
 	if err != nil {
 		return nil, false, err
@@ -622,6 +516,11 @@ func refreshDeviceToken(drt, region string) (*deviceTokenResponse, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parseDeviceTokenRefresh(data)
+}
+
+// Both proactive keepalive and host-triggered refresh consume this contract.
+func parseDeviceTokenRefresh(data []byte) (*deviceTokenResponse, error) {
 	var out deviceTokenResponse
 	if err := json.Unmarshal(data, &out); err != nil {
 		return nil, fmt.Errorf("deviceToken refresh parse: %w", err)
@@ -632,10 +531,8 @@ func refreshDeviceToken(drt, region string) (*deviceTokenResponse, error) {
 	return &out, nil
 }
 
-// handlePollLogin implements AuthProvider.PollLogin. Three paths, in order:
-//  1. Legacy PAT pasted into the modal (kept for backward compatibility).
-//  2. Panel import produced a new auth file after StartLogin (unchanged).
-//  3. Device-authorization poll (the real OAuth flow).
+// handlePollLogin completes this state through its PKCE device grant or an
+// explicitly supplied PAT. Unrelated auth-file arrivals cannot complete it.
 func handlePollLogin(raw []byte) ([]byte, error) {
 	var req pluginapi.AuthLoginPollRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
@@ -673,9 +570,12 @@ func handlePollLogin(raw []byte) ([]byte, error) {
 		ui, _ := fetchUserInfo(tok.Token, lc.region)
 		sa := buildStoredAuthFromJobToken(pat, tok, ui, lc.region)
 		loginStates.Delete(state)
+		ad := toAuthData(sa)
+		// Let the host derive the registration ID from the saved file path.
+		ad.ID = ""
 		return okEnvelope(pluginapi.AuthLoginPollResponse{
 			Status: pluginapi.AuthLoginStatusSuccess,
-			Auth:   toAuthData(sa),
+			Auth:   ad,
 		})
 	}
 
@@ -693,32 +593,18 @@ func handlePollLogin(raw []byte) ([]byte, error) {
 		// by the panel on first load. PAT coalescing happens on keepalive.
 		sa := buildStoredAuthFromDeviceToken(tok, nil, lc.region)
 		loginStates.Delete(state)
+		ad := toAuthData(sa)
+		// Let the host derive the registration ID from the saved file path.
+		ad.ID = ""
 		return okEnvelope(pluginapi.AuthLoginPollResponse{
 			Status: pluginapi.AuthLoginStatusSuccess,
-			Auth:   toAuthData(sa),
+			Auth:   ad,
 		})
-	}
-
-	// Panel-import path: a new qoderwork auth file appeared since StartLogin.
-	files, err := hostAuthList()
-	if err == nil {
-		for _, f := range files {
-			if f.CreatedAt.UnixNano() > lc.startedAt {
-				sa, err := hostAuthGet(f.AuthIndex)
-				if err == nil && sa != nil {
-					loginStates.Delete(state)
-					return okEnvelope(pluginapi.AuthLoginPollResponse{
-						Status: pluginapi.AuthLoginStatusSuccess,
-						Auth:   toAuthData(sa),
-					})
-				}
-			}
-		}
 	}
 
 	return okEnvelope(pluginapi.AuthLoginPollResponse{
 		Status:  pluginapi.AuthLoginStatusPending,
-		Message: "等待浏览器完成 QoderWork 设备授权",
+		Message: "等待浏览器完成 Qoder 设备授权",
 	})
 }
 

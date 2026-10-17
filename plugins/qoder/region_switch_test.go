@@ -102,7 +102,7 @@ func TestRequestLoginRegionExplicitCN(t *testing.T) {
 		t.Fatalf("handleStartLogin cn: %v", err)
 	}
 	url, state, _ := decodeLoginStart(t, out)
-	if !strings.Contains(url, "https://qoder.cn/") {
+	if !strings.Contains(url, "https://qoder.com.cn/") {
 		t.Fatalf("cn login URL = %q, want the cn realm", url)
 	}
 	v, ok := loginStates.Load(state)
@@ -221,7 +221,7 @@ func TestPanelLoginStartExplicitCN(t *testing.T) {
 		t.Fatalf("region = %v, want cn", payload["region"])
 	}
 	authURL, _ := payload["auth_url"].(string)
-	if !strings.Contains(authURL, "https://qoder.cn/") {
+	if !strings.Contains(authURL, "https://qoder.com.cn/") {
 		t.Fatalf("auth_url = %q, want the cn realm", authURL)
 	}
 }

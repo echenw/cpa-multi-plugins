@@ -1,10 +1,7 @@
 package main
 
-// checkin_seed_dialect_test.go — v0.8.58: the round-id SEED chain (the
-// bypass probe's last-resort id source for permanently list-filtered
-// deployments) and the derived-identity desktop dialect (Cosy-MachineOS /
-// Cosy-MachineHostname shaped like the official Windows client instead of
-// the impossible "x86_64_linux + container id" tell). Hermetic: no network.
+// CN retains the round-id seed chain and derived desktop identity. Legacy
+// Intl seed configuration still parses, but no longer drives Intl claims.
 
 import (
 	"net/http"
@@ -56,9 +53,7 @@ func TestRoundSeedChain(t *testing.T) {
 	}
 }
 
-// TestColdMemoIntlNote: with no memo and no seed (the pure-Intl container
-// case) the diagnosis must name the exact remedies instead of the blind
-// "none" line.
+// An Intl empty list stays empty even with a legacy configured round seed.
 func TestColdMemoIntlNote(t *testing.T) {
 	prevLast := roundProbeLast
 	prevMemo := roundMemo
@@ -69,8 +64,14 @@ func TestColdMemoIntlNote(t *testing.T) {
 	roundProbeLast = map[string]roundProbeLatch{}
 	roundMemo = &campaignRoundMemo{perAccount: map[string]campaignRoundEntry{}, perRegion: map[string]campaignRoundEntry{}}
 	checkinRoundSeedsMu.Lock()
-	checkinRoundSeeds = nil
+	previousSeeds := checkinRoundSeeds
+	checkinRoundSeeds = map[string]string{regionIntl: "01a0abcd-0000-0000-0000-0000000000ab"}
 	checkinRoundSeedsMu.Unlock()
+	t.Cleanup(func() {
+		checkinRoundSeedsMu.Lock()
+		checkinRoundSeeds = previousSeeds
+		checkinRoundSeedsMu.Unlock()
+	})
 
 	newBillingServer(t, "intl", map[string]func(r *http.Request) (int, string){
 		"/sash/api/v1/me/campaigns": func(r *http.Request) (int, string) {
@@ -82,19 +83,18 @@ func TestColdMemoIntlNote(t *testing.T) {
 		t.Fatalf("performCheckinCall: %v", err)
 	}
 	msg, _ := res["message"].(string)
-	if !strings.Contains(msg, "checkin_round_seeds") || !strings.Contains(msg, "QD_UMID_BIN") {
-		t.Fatalf("intl cold-memo diagnosis must name the remedies, got %q", msg)
+	if !strings.Contains(msg, "活动列表为空") || !strings.Contains(msg, "UMID") {
+		t.Fatalf("intl empty list must retain the UMID diagnosis, got %q", msg)
+	}
+	if strings.Contains(msg, "checkin_round_seeds") || strings.Contains(msg, "QD_UMID_BIN") {
+		t.Fatalf("intl diagnosis must not recommend retired seed/native paths: %q", msg)
 	}
 	if result, _ := res["result"].(string); result != "NOTHING_CLAIMABLE" {
 		t.Fatalf("result = %v, want NOTHING_CLAIMABLE", result)
 	}
 }
 
-// TestDerivedIdentityDesktopDialect: a derived identity must present the
-// official Windows desktop dialect — the official client never ships a Linux
-// bridge, so "x86_64_linux" + a raw container hostname is a structural tell
-// no official client can produce (the Intl gateway's strictness is the field
-// case; CN demonstrably ignores it).
+// The retained CN derived identity keeps its existing Windows dialect.
 func TestDerivedIdentityDesktopDialect(t *testing.T) {
 	id := derivedMachineIdentity("uid-dialect")
 	if id.MachineOS != "x86_64_win32" {

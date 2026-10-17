@@ -338,7 +338,7 @@ function showAuth(){document.getElementById("authBox").style.display="block";con
 function authHeaders(k){return k?{"Authorization":"Bearer "+k}:{}}
 /* --------------------------------------------------------------------------- */
 
-function toast(title, kind="ok", detail=""){
+function toast(title, kind="ok", detail="", persistent=false){
   const box=document.getElementById("toasts");
   const el=document.createElement("div");
   el.className="toast "+kind;
@@ -348,8 +348,15 @@ function toast(title, kind="ok", detail=""){
   box.appendChild(el);
   requestAnimationFrame(()=>requestAnimationFrame(()=>el.classList.add("show")));
   const kill=()=>{el.classList.remove("show");setTimeout(()=>el.remove(),300)};
-  el.onclick=kill;
-  setTimeout(kill, kind==="err"?6000:4000);
+  if(persistent){
+    const close=document.createElement("button");
+    close.type="button";close.className="sec";close.textContent="关闭";
+    close.setAttribute("aria-label","关闭领取结果");close.onclick=kill;
+    el.appendChild(close);
+  }else{
+    el.onclick=kill;
+    setTimeout(kill, kind==="err"?6000:4000);
+  }
   while(box.children.length>5)box.firstChild.remove();
 }
 function busy(btn, on){
@@ -758,39 +765,46 @@ async function load(force, btn){
     if(force) busy(btn, false);
   }
 }
+function checkinRedemptionCodes(res){
+  const values=Array.isArray(res.redemption_codes)?res.redemption_codes:[];
+  return [...new Set([...values,res.redemption_code].filter(v=>typeof v==="string"&&v.trim()).map(v=>v.trim()))];
+}
+function checkinResultDetails(res){
+  const parts=[];
+  const credit=Number(res.reward_credits??res.credit??res.daily_credit??0);
+  if(credit>0)parts.push("+"+credit+" 积分");
+  const msg=asText(res.message);
+  if(msg&&msg!=="签到成功")parts.push(msg);
+  const codes=checkinRedemptionCodes(res).filter(code=>!msg.includes(code));
+  if(codes.length)parts.push("兑换码："+codes.join("、"));
+  if(Array.isArray(res.claim_errors)&&res.claim_errors.length)parts.push("未完成："+res.claim_errors.map(asText).join("；"));
+  if(res.streak_days!=null)parts.push("连续 "+res.streak_days+" 天");
+  return parts.join(" · ");
+}
 function checkinResultToast(res, who){
   const name=res.nickname||who||"账号";
   if(res.error){toast(name+"：签到失败","err",asText(res.error));return}
-  if(res.reason==="global"||(/国际版|不支持/.test(asText(res.message)))){
-    toast(name+"：qoder 无需签到","warn",asText(res.message)||"请用领取专家加油包");return;
+  if(res.reason==="global"||res.reason==="unsupported"){
+    toast(name+"：当前账号不支持签到","warn",asText(res.message));return;
   }
-  // v0.8.41: key on the structured reason. The old /今日/ text match
-  // rendered "今日暂无可直接签领的权益…" and "今日名额已发完…" — both
-  // NOTHING-claimable states — as a green 今日已签到 toast, the exact
-  // "显示已签但积分不动" confusion from the field report.
-  if(res.reason==="already"||(res.skipped&&/already|已签/.test(asText(res.message)))){
+  if(res.reason==="already"){
     toast(name+"：今日已签到","ok",asText(res.message));return;
   }
   if(res.reason==="none"){toast(name+"：今日无可签领权益","warn",asText(res.message));return}
   if(res.reason==="not_eligible"){toast(name+"：暂不可领取","warn",asText(res.message));return}
   if(res.reason==="blocked"){toast(name+"：同人已领取","warn",asText(res.message));return}
-  if(res.success){toast(name+"：签到成功","ok","+"+(res.credit??res.daily_credit??res.reward_credits??"")+" 积分 · 连续 "+(res.streak_days??"?")+" 天");return}
+  if(res.partial){toast(name+"：部分领取成功","warn",checkinResultDetails(res),checkinRedemptionCodes(res).length>0);return}
+  if(res.success){
+    const credit=Number(res.reward_credits??res.credit??res.daily_credit??0);
+    toast(name+(credit>0?"：签到成功":"：奖励已领取"),"ok",checkinResultDetails(res),checkinRedemptionCodes(res).length>0);return;
+  }
   toast(name+"："+(asText(res.message)||"未知结果"),"warn");
 }
 function isCheckinDoneResult(res){
-  if(!res||res.error) return false;
-  if(res.reason==="global") return false;
-  // v0.8.41: structured reasons first — "none/not_eligible/blocked" are NOT
-  // done states (the button must stay 签到 so the 10:00 round can be
-  // retried); the old /今日/ text match marked them done, freezing the card
-  // on a signed-in look while upstream had granted nothing.
+  if(!res||res.error||res.partial) return false;
+  if(["global","unsupported","none","not_eligible","blocked"].includes(res.reason)) return false;
   if(res.reason==="already") return true;
-  if(res.reason==="none"||res.reason==="not_eligible"||res.reason==="blocked") return false;
-  if(res.success) return true;
-  const msg=asText(res.message);
-  // already checked in today (backend) — treat as done, not failure
-  if(/already|已签/.test(msg) && !/暂无可|名额已发完|不可领取|同人已领取/.test(msg) && !/国际版|不支持/.test(msg)) return true;
-  return false;
+  return res.success===true&&!res.skipped;
 }
 async function checkin(idx, btn){
   busy(btn,true);
@@ -899,45 +913,33 @@ async function refreshCredits(idx, btn){
     busy(btn,false);
   }
 }
+function checkinBatchToast(d){
+  if(d.error){toast("批量签到失败","err",asText(d.error));return}
+  const rs=d.results||[],s=d.summary||{};
+  if(!rs.length){toast("没有需要签到的账号","warn");return}
+  const ok=Number(s.success)||0,partial=Number(s.partial)||0,already=Number(s.already)||0;
+  const skipped=Number(s.skipped)||0,fail=Number(s.fail)||0;
+  const counts=[ok+" 成功"];
+  if(partial)counts.push(partial+" 部分成功");
+  if(already)counts.push(already+" 已签");
+  if(skipped)counts.push(skipped+" 跳过");
+  if(fail)counts.push(fail+" 失败");
+  const detail=rs.map(r=>{
+    const text=r.error?asText(r.error):checkinResultDetails(r);
+    return text?(r.nickname||r.name||"账号")+"："+text:"";
+  }).filter(Boolean).join("；");
+  toast("批量签到："+counts.join(" / "),fail?"err":(partial||skipped?"warn":"ok"),detail,rs.some(r=>checkinRedemptionCodes(r).length>0));
+}
 async function checkinAll(btn){
   busy(btn,true);
   try{
-    // Backend prefilters: already-checked skipped; only CN-need-checkin run.
     const d=await api("/checkin",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
     const rs=d.results||[];
-    const s=d.summary||{};
-    const ok=Number(s.success??rs.filter(x=>x.success&&x.reason!=="already"&&!x.skipped).length)||0;
-    const already=Number(s.already??rs.filter(x=>isCheckinDoneResult(x)&&(x.reason==="already"||x.skipped||!x.success)).length)||0;
-    const fail=Number(s.fail??rs.filter(x=>x.error).length)||0;
-    const skippedCN=Number(s.skipped_cn||0);
-    const eligible=Number(s.eligible??(ok+fail))||0;
-    const detailParts=[];
-    
-    if(already) detailParts.push("今日已签 "+already);
-    if(eligible) detailParts.push("待签 "+eligible);
-    const detail=detailParts.join(" · ");
-    if(d.error){toast("批量签到失败","err",d.error)}
-    else if(fail){
-      const errDetail=rs.filter(x=>x.error).map(x=>(x.nickname||"")+": "+asText(x.error)).join("；");
-      toast("批量签到："+ok+" 成功 / "+fail+" 失败"+(already?" / "+already+" 已签":""),"err",errDetail||detail);
-    }else if(ok){
-      toast("批量签到："+ok+" 成功"+(already?" / "+already+" 今日已签":""),"ok",detail);
-    }else if(already||skippedCN){
-      toast("无需签到","ok",detail||"qoder cn 今日已签");
-    }else if(!rs.length && !eligible){
-      toast("没有需要签到的 qoder cn 账号","warn",detail||"");
-    }else{
-      toast("没有需要签到的账号","warn",detail);
-    }
-    // Mark CN check-in buttons done immediately when any success/already
-    if(ok||already){
-      document.querySelectorAll("#grid .card").forEach(c=>{
-        if((c.dataset.region||"cn")==="cn"){
-          const b=c.querySelector('[data-action="checkin"]');
-          if(b && /签到|处理中/.test(b.textContent||"")) markCheckinDone(b);
-        }
-      });
-    }
+    checkinBatchToast(d);
+    const done=new Set(rs.filter(isCheckinDoneResult).map(r=>r.auth_index));
+    document.querySelectorAll("#grid .card").forEach(c=>{
+      if(done.has(c.dataset.auth))markCheckinDone(c.querySelector('[data-action="checkin"]'));
+    });
     await new Promise(r=>setTimeout(r,1500)); await load(true);
   }catch(e){toast("批量签到失败","err",e.message)}
   // load() re-renders grid; only restore toolbar button

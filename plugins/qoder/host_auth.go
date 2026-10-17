@@ -63,7 +63,7 @@ func hostAuthList() ([]pluginapi.HostAuthFileEntry, error) {
 
 // hostAuthGet fetches the credential JSON for one auth index.
 func hostAuthGet(authIndex string) (*storedAuth, error) {
-	phys, err := hostAuthGetPhysical(authIndex)
+	phys, err := hostAuthGetPhysicalFn(authIndex)
 	if err != nil {
 		return nil, err
 	}

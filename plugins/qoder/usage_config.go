@@ -73,14 +73,10 @@ var (
 	claimUnverified   bool
 	claimUnverifiedMu sync.RWMutex
 
-	// checkinRoundSeeds: config_yaml checkin_round_seeds, v0.8.58. Operator
-	// supplied per-region daily-round campaign UUIDs for the bypass probe's
-	// last-resort fallback ("intl=01a0…,cn=01a0…"). Deployments whose
-	// campaigns list is permanently identity-filtered (Intl + derived
-	// machine identity) never see the daily row, so their probe memo never
-	// seeds — a seed id lets check-in still claim. The upstream claim
-	// verdict stays the authority: a stale seed answers typed
-	// CAMPAIGN_NOT_ACTIVE and is retried after the 30-min latch expires.
+	// CN keeps its operator-supplied daily-round UUID fallback. Existing intl
+	// entries still round-trip through configuration, but international
+	// check-in only claims activities returned in its current list and never
+	// consumes a configured or remembered hidden-round seed.
 	checkinRoundSeeds   map[string]string
 	checkinRoundSeedsMu sync.RWMutex
 )

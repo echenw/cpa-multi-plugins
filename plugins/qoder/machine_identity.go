@@ -1,78 +1,6 @@
-// machine_identity.go implements the campaigns platform's machine-identity
-// layer — the missing half of the "打开客户端同步资格" story.
-//
-// Upstream forensics (v0.8.36, cross-verified against the qoder2api-hub
-// capture, https://github.com/shuishuipingan/qoder2api-hub):
-//
-// The campaigns surface filters DEVICE-TARGETED campaign rows (the daily
-// "100 Credits" grant and the one-shot +1800 Pro upgrade pack) on the
-// Cosy-Machine* request headers — in TWO independent layers:
-//
-//  1. Missing desktop headers (Cosy-ClientType/Cosy-Version) → the server
-//     answers HTTP 200 with an EMPTY campaign list (no error — v0.8.22
-//     already fixed this layer for this plugin).
-//  2. Missing or DERIVED machine identity (Cosy-Machine*) → the list comes
-//     back silently SHORT: device-targeted rows are dropped for identities
-//     the server does not recognize. This is exactly why a healthy account
-//     can see no Pro pack row at all — and it is the real mechanism behind
-//     the "open the activity once inside the official client first" hint:
-//     what the official client contributes is NOT a mysterious session
-//     sync, it is its REAL machine identity.
-//
-// The official desktop client obtains that identity by spawning its native
-// risk-identity bridge before every campaigns call:
-//
-//	<install>/resources/umid/runtime-info.exe prod --account-stdin
-//	stdin:  {"account": <uid>}
-//	stdout: {"machineToken","machineType","machineCode","vmInfo":{...}}
-//
-// The identity is MACHINE-level (every account id on the same host returns
-// the same values), rotates over time, and briefly-stale values are still
-// accepted — so it is cached per region for 30 minutes (hub live-verified:
-// a reused identity still answered showCampaign=true 25s+ later; the real
-// cost of a forced refresh is a ~3.7s native run).
-//
-// When the official client is not installed (or QD_NATIVE_IDENTITY=0), the
-// identity falls back to a per-uid stable derivation with the same shape —
-// honest in the diagnostics about the filtering risk that fallback carries.
-//
-// v0.8.44 (SIMULATED identity — the container answer, per maintainer ruling:
-// a container deployment can never present a real machine identity and must
-// not try; it must SIMULATE one, in the exact shape the official bridge
-// emits). The generation logic was extracted from the official artifacts:
-//
-//   - runtime-info itself, extracted from the official CN CLI 1.1.65 bundle
-//     (qoderclicn embeds all five platform builds as base64 Buffer literals;
-//     the linux-x64 one decodes to sha256 e30b307e...f7d7478 — byte-identical
-//     to the IDE deb's resources/umid/runtime-info). It is the Alibaba UMID
-//     SDK's Rust bridge: it phones home to pum.m.taobao.com / *.alibabachengdun.com
-//     "repPc.json" collectors and caches its state AES-encrypted in
-//     ~/.config/.locale_cfg (random 16-char keys + a millis timestamp).
-//   - Container-verified output format (9 runs, all observed values):
-//     machineToken  88 chars base64url, ALWAYS prefixed "P1gA"
-//     = raw 66 bytes: fixed header 3f 58 00 + 63 random bytes
-//     machineType   18 hex chars, ALWAYS 8hex + "91" + 8hex
-//     machineCode   18 hex chars, ALWAYS 8hex + "00" + 8hex
-//     vmInfo        {"isVm":false,"brand":"None","percentage":0,"vmTypeCode":91}
-//     (isVm is machine-local and dropped by the client's EUt
-//     mapper — it never reaches the server as a header)
-//   - Generation semantics: with the cache unreadable the bridge mints a FRESH
-//     random identity per run (verified: every run differs, even with a
-//     writable HOME; stability only comes from .locale_cfg decrypting). The
-//     official desktop client keeps it stable via that cache plus its own 1h
-//     spawn cache; the server demonstrably accepts fresh AND reused values
-//     (hub live test: reused identity still answered showCampaign=true 25s+).
-//     What the server does NOT accept is a MALFORMED value: the old derived
-//     scheme (43-char token without the 3f5800 header, 18-hex type without
-//     the 91 marker, 32-hex code without the 00 marker) was silently filtered
-//     from device-targeted rows — that was the entire "派生身份被过滤" mystery.
-//
-// The simulated identity therefore replays the exact official shape:
-// "P1gA" + 63 stable per-uid derived bytes (88 chars), 8hex+"91"+8hex,
-// 8hex+"00"+8hex — per-UID, not per-machine, so accounts never collide into
-// upstream's per-person dedup (SAME_PERSON_ALREADY_CLAIMED hides the daily
-// row from every account sharing one identity). The QD_UMID_BIN escape hatch
-// (a real official bridge on disk) still wins when present.
+// machine_identity.go retains CN campaign native/simulated identities.
+// International campaign requests use account-scoped UMID (umid.go); neither
+// authorization entry point spawns or provisions the native bridge.
 package main
 
 import (
@@ -609,6 +537,9 @@ func attachMachineIdentityHeaders(req *http.Request, mi *machineIdentity) {
 // machineIdentityHint renders the identity's role in the 领取Pro diagnostics:
 // where it came from and what its limitations mean for device-targeted rows.
 func machineIdentityHint(sa *storedAuth) string {
+	if authRegion(sa) == regionIntl {
+		return "。国际版活动身份来源：按账号获取的 UMID（12 小时缓存），不依赖本机 runtime-info 或模拟令牌"
+	}
 	mi := machineIdentityFor(authRegion(sa), sa.Account.UID, false)
 	if mi.Source == "runtime-info" {
 		if mi.VMIsVM {

@@ -120,11 +120,10 @@ const (
 // verifier/challenge + nonce/machine_id, the user authorizes in a browser,
 // and PollLogin exchanges the grant at /api/v1/deviceToken/poll.
 type loginCtx struct {
-	verifier  string // PKCE code_verifier — required by the poll endpoint
-	nonce     string // device-flow nonce — paired with the auth URL
-	region    string // login region: cn | intl (merged qoder-intl)
-	expires   time.Time
-	startedAt int64 // unix nano, set when StartLogin creates the state
+	verifier string // PKCE code_verifier — required by the poll endpoint
+	nonce    string // device-flow nonce — paired with the auth URL
+	region   string // login region: cn | intl (merged qoder-intl)
+	expires  time.Time
 }
 
 var (
@@ -373,7 +372,7 @@ func wbRegistration() registration {
 			Logo:             pluginLogoURL,
 			ConfigFields: []pluginapi.ConfigField{
 				{Name: "checkin_auto", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Enable daily auto check-in at 09:00 and 21:00 local time for CN accounts (default true)."},
-				{Name: "login_dialect", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{loginDialectCockpit, loginDialectDesktop}, Description: "DEPRECATED since v0.8.45 (no-op). Both CN and Intl now always use the official desktop-client v0.4.3 wire format (client_id 732aef47-… + machine identity + /users/sign-in?biz_variant=qoder wrapper) — the official first-login newbie grant (14-day Pro trial + 300 credits) fires server-side on every login. The config key is kept for backward compat only; both values produce the same URL."},
+				{Name: "login_dialect", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{loginDialectCockpit, loginDialectDesktop}, Description: "Deprecated no-op retained for configuration round-trips. Both values use the cpa-workbuddy-plugin device flow: client_id 1c5e33e1-… with qoder-work-cn:// (CN) or qoder-work:// (Intl). Campaign eligibility is determined upstream."},
 				{Name: "claim_unverified", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Opt-in (default false): when true, the Pro-claim flow may claim a CLAIMABLE campaigns row whose reward face value could not be verified (unreadable or absent) instead of only reporting it. Rows that reveal a readable reward are never claimed here."},
 				{Name: "lifecycle_auto", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Auto disable CN when credits exhausted; re-enable CN after check-in restores credits (default true)."},
 				{Name: "token_keepalive", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Enable daily access-token refresh at 22:00 local time to prevent Keycloak offline-session expiry (default true)."},

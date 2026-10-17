@@ -1,4 +1,4 @@
-.PHONY: build test lint clean release
+.PHONY: build test test-panel lint clean release
 
 GO ?= go
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -11,6 +11,10 @@ build:
 # Run all tests with race detector.
 test:
 	$(GO) test -race -count=1 ./...
+
+# Result presentation and account-button behavior; no browser or network.
+test-panel:
+	node --test panel_checkin_test.cjs
 
 # Lint everything (requires gofmt + go vet; staticcheck/gocritic/unparam optional).
 lint:

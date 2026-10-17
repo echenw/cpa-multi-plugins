@@ -1,7 +1,6 @@
-// checkin.go implements daily check-in for CN accounts: the manual
-// handleManualCheckin endpoint, the 09:00 / 21:00 auto scheduler, and the
-// per-account mutex that prevents duplicate check-ins from racing browser
-// tabs. CN accounts are excluded — they use one-shot trial claims instead.
+// checkin.go implements campaign check-in for both regions: the manual
+// handleManualCheckin endpoint, the auto scheduler, and the per-account
+// mutex that serializes manual requests from browser tabs.
 //
 // v0.12.109 context (official Intl+CN desktop v0.4.3 asar forensics + field
 // report): the legacy daily UI no longer exists in the client — benefits ride
@@ -9,7 +8,9 @@
 // (qoder.campaign postMessage protocol, verdict kind=claim_succeeded), while
 // the host only injects Authorization + Cosy-* identity headers. The client's
 // own launch step (campaigns status + client_launch_26 limited-number) is
-// mirrored by campaignLaunchSync (campaign.go). Current official newbie
+// mirrored for CN by campaignLaunchSync (campaign.go). Intl only claims
+// explicit current-list activities and does not run launch/hidden-round probes.
+// Current official newbie
 // grants: first-login 300 + campaign 100 credits; the +1800 Pro pack is no
 // longer delivered (user field report 2026-10-01).
 package main
@@ -219,10 +220,10 @@ func processAutoCheckinAccount(f pluginapi.HostAuthFileEntry, doCheckin bool) {
 	}
 }
 
-// handleManualCheckin checks in one account (auth_index) or all qoderwork
-// accounts. Unlike the workbuddy three-phase classify/execute/summarize flow,
-// QoderWork's checkin is a simple Bearer GET+POST — we run it directly per
-// account under an 8s timeout, no classify stage.
+// handleManualCheckin checks in one account (auth_index) or all Qoder
+// accounts. Each account runs its status and claim calls serially; results
+// distinguish confirmed grants, partial grants, already claimed, skips,
+// and request failures.
 func handleManualCheckin(req pluginapi.ManagementRequest) map[string]any {
 	t0 := time.Now()
 	var body struct {
@@ -232,7 +233,7 @@ func handleManualCheckin(req pluginapi.ManagementRequest) map[string]any {
 	authIndex := strings.TrimSpace(body.AuthIndex)
 	single := authIndex != ""
 
-	files, err := hostAuthList()
+	files, err := hostAuthListFn()
 	if err != nil {
 		return map[string]any{"error": err.Error()}
 	}
@@ -270,14 +271,22 @@ func handleManualCheckin(req pluginapi.ManagementRequest) map[string]any {
 	for r := range outCh {
 		results[r.idx] = r.out
 	}
-	successN, alreadyN, failN := 0, 0, 0
+	successN, partialN, alreadyN, skippedN, failN := 0, 0, 0, 0, 0
 	for _, r := range results {
 		if r["error"] != nil {
 			failN++
 			continue
 		}
-		if r["skipped"] == true {
+		if r["partial"] == true {
+			partialN++
+			continue
+		}
+		if r["reason"] == "already" {
 			alreadyN++
+			continue
+		}
+		if r["skipped"] == true {
+			skippedN++
 			continue
 		}
 		if r["success"] == true {
@@ -291,15 +300,17 @@ func handleManualCheckin(req pluginapi.ManagementRequest) map[string]any {
 		"summary": map[string]any{
 			"total":      len(targets),
 			"success":    successN,
+			"partial":    partialN,
 			"already":    alreadyN,
+			"skipped":    skippedN,
 			"fail":       failN,
 			"elapsed_ms": time.Since(t0).Milliseconds(),
 		},
 	}
 }
 
-// checkinOneAccount performs the actual GET status + POST claim flow for one
-// account. 8s overall budget — never blocks past that.
+// checkinOneAccount performs the GET status + POST claim flow for one
+// account. The upstream helpers own their individual request timeouts.
 func checkinOneAccount(f pluginapi.HostAuthFileEntry) map[string]any {
 	out := map[string]any{
 		"auth_index": f.AuthIndex,
@@ -316,7 +327,7 @@ func checkinOneAccount(f pluginapi.HostAuthFileEntry) map[string]any {
 	}
 	out["nickname"] = sa.Account.Nickname
 
-	// Step 1: GET status (5s budget).
+	// Step 1: GET status.
 	ci, err := fetchCheckinStatus(sa)
 	if err != nil {
 		out["error"] = "status: " + err.Error()
@@ -351,7 +362,7 @@ func checkinOneAccount(f pluginapi.HostAuthFileEntry) map[string]any {
 	if cr, err := fetchUserResource(sa); err == nil {
 		creditsBefore = cr
 	}
-	// Step 2: POST claim (5s budget).
+	// Step 2: POST claim.
 	res, err := performCheckinCall(sa)
 	if err != nil {
 		out["error"] = "claim: " + err.Error()
@@ -431,8 +442,10 @@ func checkinOneAccount(f pluginapi.HostAuthFileEntry) map[string]any {
 		// zero credits. Surface the code verbatim and an honest
 		// message — "积分无变化" reports start when a non-credits
 		// grant renders as a plain 签到成功 +100.
-		if code, ok := res["redemption_code"].(string); ok && strings.TrimSpace(code) != "" {
-			out["redemption_code"] = code
+		for _, key := range []string{"redemption_code", "redemption_codes", "benefit_kind", "partial", "claim_errors"} {
+			if value, ok := res[key]; ok {
+				out[key] = value
+			}
 		}
 		if msg, ok := res["message"].(string); ok && strings.TrimSpace(msg) != "" {
 			out["message"] = msg
